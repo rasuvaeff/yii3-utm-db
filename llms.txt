@@ -1,0 +1,108 @@
+# rasuvaeff/yii3-utm-db
+
+Database storage for `rasuvaeff/yii3-utm`. Namespace `Rasuvaeff\Yii3UtmDb`.
+PHP 8.3–8.5, requires `ext-json`, `ext-pdo`, `yiisoft/db` 2.x and
+`yiisoft/db-migration` 2.x.
+
+## Install
+
+```bash
+composer require rasuvaeff/yii3-utm-db
+```
+
+## Rules
+
+1. **This package is the single binder of `UtmAttributionRepository`.** The core
+   leaves the key unbound; binding it again in the application produces
+   `Duplicate key while building "di"` from `yiisoft/config`.
+2. **`setSourceNamespaces()` finds nothing here.** `Rasuvaeff\Yii3Utm\` is a
+   string prefix of `Rasuvaeff\Yii3UtmDb\`, so `yiisoft/db-migration` resolves
+   the namespace into the core package and silently reports "up to date".
+   Apply migrations through `Injector::make(...)->up($builder)`.
+3. **Ordering is `recorded_at, id`** — both assigned by the server.
+   `occurred_at` is what the client claimed; it never orders anything and there
+   is no `is_first_interaction` column.
+4. **`append()` is race-safe**: a no-op upsert with duplicate-key handling. Do
+   not replace it with `exists()` + `insert()`.
+5. **Rows are validated, not coerced.** A row that does not match the schema —
+   missing column, unparsable timestamp, a `dedupe_key` that disagrees with the
+   stored touchpoint — raises `Exception\MalformedRow`, which implements
+   `Exception\UtmDbException` (itself a `Rasuvaeff\Yii3Utm\Exception\UtmException`),
+   so a consumer can catch every failure of the UTM stack in one place.
+
+## API reference
+
+### DbUtmAttributionRepository
+
+```php
+use Rasuvaeff\Yii3UtmDb\{DbUtmAttributionRepository, UtmAttributionTableName, UtmAttributionRowMapper};
+
+$repository = new DbUtmAttributionRepository(
+    db: $connection,                              // Yiisoft\Db\Connection\ConnectionInterface
+    clock: $clock,                                // Psr\Clock\ClockInterface
+    table: new UtmAttributionTableName(),         // defaults to utm_attribution
+    mapper: new UtmAttributionRowMapper(),
+);
+```
+
+Implements `Rasuvaeff\Yii3Utm\UtmAttributionRepository`: `append()`,
+`findByEntity()`, `findFirst()`, `findLast()`, `countByEntity()`,
+`deleteByEntity()`, `purgeOlderThan()`. Reads return
+`DbUtmAttributionRecord` instances in canonical order.
+
+### UtmAttributionTableName
+
+```php
+new UtmAttributionTableName('analytics.utm_attribution');
+$table->value;            // validated /^[A-Za-z_]\w*(\.[A-Za-z_]\w*)?\z/
+$table->forIndexName();   // 'analytics_utm_attribution', trimmed to 40 chars
+```
+
+A typed value object rather than a string because `yiisoft/db-migration` builds
+migrations with `Injector::make()`, which resolves arguments by type — a scalar
+would silently ignore configuration.
+
+### UtmAttributionRowMapper
+
+```php
+$row = $mapper->toRow($attribution, $recordedAt);   // array<string, string|null>
+$record = $mapper->toRecord($row);                  // DbUtmAttributionRecord
+UtmAttributionRowMapper::formatTime($moment);       // 'Y-m-d H:i:s.u' in UTC
+```
+
+### Migration
+
+```php
+use Rasuvaeff\Yii3UtmDb\Migration\M260801000000CreateUtmAttributionTable;
+
+$injector->make(M260801000000CreateUtmAttributionTable::class)->up($builder);
+```
+
+Columns: `id` (big primary key), `entity_id`, `event_id`, `interaction_type`,
+`utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `utm_id`,
+`click_ids`, `referrer`, `referrer_host`, `landing_page`, `occurred_at`,
+`recorded_at`, `fingerprint`, `dedupe_key`.
+
+Indexes: `uq_<table>_dedupe` (UNIQUE), `idx_<table>_entity`,
+`idx_<table>_entity_type`, `idx_<table>_recorded`.
+
+The primary key is declared with `ColumnBuilder::bigPrimaryKey()`. The string
+`'bigprimarykey'` is **not** a valid token — SQLite accepts it silently and
+every `id` then reads back as `NULL`.
+
+### Console
+
+```bash
+./yii utm:purge --older-than=365 [--dry-run]
+```
+
+`PurgeUtmAttributionCommand(UtmAttributionRepository $repository,
+ClockInterface $clock, int $defaultDays = 365)`. Retention only; use
+`deleteByEntity()` for a personal-data request.
+
+### Configuration
+
+`config/params.php` → `rasuvaeff/yii3-utm-db`: `table`, `table_prefix`,
+`retentionDays`; plus `yiisoft/yii-console.commands['utm:purge']`.
+`config/di.php` binds `UtmAttributionTableName`,
+`DbUtmAttributionRepository`, `UtmAttributionRepository` and the command.
