@@ -69,7 +69,7 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
     ): array {
         $rows = $this->baseQuery($entityId, $interactionType)
             ->orderBy(['recorded_at' => SORT_ASC, 'id' => SORT_ASC])
-            ->limit($limit)
+            ->limit(\min($limit, self::MAX_LIMIT))
             ->offset($offset)
             ->all();
 
@@ -126,6 +126,17 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
             ->execute();
 
         return \max(0, $affected);
+    }
+
+    #[\Override]
+    public function countOlderThan(\DateTimeImmutable $before): int
+    {
+        $count = (new Query($this->db))
+            ->from($this->table)
+            ->where(['<', 'recorded_at', UtmAttributionRowMapper::formatTime($before)])
+            ->count();
+
+        return \max(0, (int) $count);
     }
 
     private function one(string $entityId, ?InteractionType $interactionType, int $direction): ?UtmAttributionRecord

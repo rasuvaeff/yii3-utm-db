@@ -10,7 +10,6 @@ use Rasuvaeff\Yii3Utm\Referrer;
 use Rasuvaeff\Yii3Utm\UtmAttribution;
 use Rasuvaeff\Yii3Utm\UtmParameters;
 use Rasuvaeff\Yii3Utm\UtmTouchpoint;
-use Rasuvaeff\Yii3UtmDb\DbUtmAttributionRecord;
 use Rasuvaeff\Yii3UtmDb\Exception\MalformedRow;
 use Rasuvaeff\Yii3UtmDb\Exception\UtmDbException;
 use Rasuvaeff\Yii3UtmDb\UtmAttributionRowMapper;
@@ -22,10 +21,10 @@ use Testo\Test;
 
 #[Test]
 #[Covers(UtmAttributionRowMapper::class)]
-#[Covers(DbUtmAttributionRecord::class)]
-#[Covers(MalformedRow::class)]
 final class UtmAttributionRowMapperTest
 {
+    private const string MISSING = '__missing_column__';
+
     private UtmAttributionRowMapper $mapper;
 
     #[BeforeTest]
@@ -36,7 +35,7 @@ final class UtmAttributionRowMapperTest
 
     public function writesEveryColumn(): void
     {
-        $row = $this->mapper->toRow(self::attribution(), self::at('2026-08-01 12:00:00'));
+        $row = $this->mapper->toRow($this->attribution(), $this->at('2026-08-01 12:00:00'));
 
         Assert::same(\array_keys($row), [
             'entity_id', 'event_id', 'interaction_type',
@@ -52,10 +51,28 @@ final class UtmAttributionRowMapperTest
         Assert::same(\strlen((string) $row['dedupe_key']), 64);
     }
 
+    public function writesNullReferrerColumnsWhenThereIsNoReferrer(): void
+    {
+        $withoutReferrer = new UtmAttribution(
+            entityId: 'user-1',
+            eventId: 'order-1',
+            interactionType: InteractionType::purchase(),
+            touchpoint: UtmTouchpoint::of(
+                utm: new UtmParameters(source: 'google'),
+                occurredAt: $this->at('2026-07-01 10:00:00'),
+            ),
+        );
+
+        $row = $this->mapper->toRow($withoutReferrer, $this->at('2026-08-01 12:00:00'));
+
+        Assert::null($row['referrer']);
+        Assert::null($row['referrer_host']);
+    }
+
     public function roundTripsThroughARow(): void
     {
-        $attribution = self::attribution();
-        $row = $this->mapper->toRow($attribution, self::at('2026-08-01 12:00:00'));
+        $attribution = $this->attribution();
+        $row = $this->mapper->toRow($attribution, $this->at('2026-08-01 12:00:00'));
         $record = $this->mapper->toRecord([...$row, 'id' => 7]);
 
         Assert::same($record->id(), '7');
@@ -66,14 +83,7 @@ final class UtmAttributionRowMapperTest
         Assert::same($record->recordedAt()->format('Y-m-d H:i:s'), '2026-08-01 12:00:00');
     }
 
-    public function acceptsATimestampWithoutMicroseconds(): void
-    {
-        $row = [...$this->validRow(), 'recorded_at' => '2026-08-01 12:00:00'];
-
-        Assert::same($this->mapper->toRecord($row)->recordedAt()->format('Y-m-d H:i:s'), '2026-08-01 12:00:00');
-    }
-
-    public function acceptsAnEmptyClickIdColumn(): void
+    public function acceptsTheCanonicalEmptyClickIdObject(): void
     {
         $withoutClickIds = new UtmAttribution(
             entityId: 'user-1',
@@ -81,25 +91,33 @@ final class UtmAttributionRowMapperTest
             interactionType: InteractionType::purchase(),
             touchpoint: UtmTouchpoint::of(
                 utm: new UtmParameters(source: 'google'),
-                occurredAt: self::at('2026-07-01 10:00:00'),
+                occurredAt: $this->at('2026-07-01 10:00:00'),
             ),
         );
 
-        $row = [...$this->mapper->toRow($withoutClickIds, self::at('2026-08-01 12:00:00')), 'id' => 1];
+        $row = [...$this->mapper->toRow($withoutClickIds, $this->at('2026-08-01 12:00:00')), 'id' => 1];
 
-        foreach ([null, '', '{}'] as $value) {
-            $record = $this->mapper->toRecord([...$row, 'click_ids' => $value]);
+        $record = $this->mapper->toRecord([...$row, 'click_ids' => '{}']);
 
-            Assert::true($record->attribution()->touchpoint->clickIds->isEmpty());
-            Assert::same($record->attribution()->dedupeKey, $withoutClickIds->dedupeKey);
-        }
+        Assert::true($record->attribution()->touchpoint->clickIds->isEmpty());
+        Assert::same($record->attribution()->dedupeKey, $withoutClickIds->dedupeKey);
     }
 
     #[DataProvider('malformedRowsProvider')]
     public function rejectsMalformedRows(array $overrides, string $expectedFragment): void
     {
+        $row = $this->validRow();
+
+        foreach ($overrides as $column => $value) {
+            if ($value === self::MISSING) {
+                unset($row[$column]);
+            } else {
+                $row[$column] = $value;
+            }
+        }
+
         try {
-            $this->mapper->toRecord([...$this->validRow(), ...$overrides]);
+            $this->mapper->toRecord($row);
         } catch (MalformedRow $e) {
             Assert::instanceOf($e, UtmDbException::class);
             Assert::string($e->getMessage())->contains($expectedFragment);
@@ -122,13 +140,47 @@ final class UtmAttributionRowMapperTest
 
         yield 'non-string column' => [['utm_source' => 42], 'is not a string'];
 
-        yield 'unparsable time' => [['recorded_at' => 'yesterday'], 'is not a UTC timestamp'];
+        yield 'unparsable time' => [['recorded_at' => 'yesterday'], 'cannot be parsed as a UTC timestamp'];
+
+        yield 'invalid calendar date' => [['recorded_at' => '2026-02-31 12:00:00.000000'], 'contains an invalid calendar date'];
+
+        yield 'timestamp without microseconds' => [['recorded_at' => '2026-08-01 12:00:00'], 'cannot be parsed as a UTC timestamp'];
+
+        yield 'timestamp with a non-canonical month' => [['recorded_at' => '2026-8-01 12:00:00.000000'], 'is not a canonical UTC timestamp'];
 
         yield 'invalid interaction type' => [['interaction_type' => 'Purchase!'], 'interaction_type'];
 
         yield 'broken click ids' => [['click_ids' => '{not json'], 'is not valid JSON'];
 
         yield 'click ids not an object' => [['click_ids' => '"x"'], 'is not a JSON object'];
+
+        yield 'click ids list' => [['click_ids' => '["x"]'], 'is not a JSON object'];
+
+        yield 'non-canonical click ids' => [['click_ids' => '{"fbclid":"fb","gclid":"g"}'], 'is not canonical'];
+
+        yield 'missing nullable column' => [['utm_term' => self::MISSING], 'utm_term'];
+
+        yield 'non-canonical UTM value' => [['utm_source' => ' google '], 'utm_*'];
+
+        yield 'referrer host without URL' => [['referrer' => null, 'referrer_host' => 'example.com'], 'referrer_host'];
+
+        yield 'mismatched referrer host' => [['referrer_host' => 'other.example.com'], 'referrer_host'];
+    }
+
+    public function rejectsAnInvalidReferrerAtTheReferrerColumn(): void
+    {
+        try {
+            $this->mapper->toRecord([...$this->validRow(), 'referrer' => 'not-a-url']);
+        } catch (MalformedRow $e) {
+            Assert::same(
+                $e->getMessage(),
+                'Malformed attribution row: column "referrer" is not a canonical absolute URL',
+            );
+
+            return;
+        }
+
+        Assert::true(false);
     }
 
     /**
@@ -151,6 +203,21 @@ final class UtmAttributionRowMapperTest
         Assert::true(false);
     }
 
+    public function rejectsAStoredFingerprintThatDoesNotMatch(): void
+    {
+        $row = [...$this->validRow(), 'fingerprint' => \str_repeat('0', 64)];
+
+        try {
+            $this->mapper->toRecord($row);
+        } catch (MalformedRow $e) {
+            Assert::string($e->getMessage())->contains('fingerprint');
+
+            return;
+        }
+
+        Assert::true(false);
+    }
+
     public function formatsTimeInUtc(): void
     {
         $moscow = new \DateTimeImmutable('2026-08-01 15:00:00', new \DateTimeZone('Europe/Moscow'));
@@ -163,10 +230,10 @@ final class UtmAttributionRowMapperTest
      */
     private function validRow(): array
     {
-        return [...$this->mapper->toRow(self::attribution(), self::at('2026-08-01 12:00:00')), 'id' => 1];
+        return [...$this->mapper->toRow($this->attribution(), $this->at('2026-08-01 12:00:00')), 'id' => 1];
     }
 
-    private static function attribution(): UtmAttribution
+    private function attribution(): UtmAttribution
     {
         return new UtmAttribution(
             entityId: 'user-1',
@@ -174,7 +241,7 @@ final class UtmAttributionRowMapperTest
             interactionType: InteractionType::purchase(),
             touchpoint: UtmTouchpoint::of(
                 utm: new UtmParameters(source: 'google', medium: 'cpc', campaign: 'summer'),
-                occurredAt: self::at('2026-07-01 10:00:00'),
+                occurredAt: $this->at('2026-07-01 10:00:00'),
                 clickIds: ClickIds::fromArray(['gclid' => 'abc']),
                 referrer: Referrer::of('https://ads.example.com/banner'),
                 landingPage: 'https://shop.example.com/summer',
@@ -182,7 +249,7 @@ final class UtmAttributionRowMapperTest
         );
     }
 
-    private static function at(string $time): \DateTimeImmutable
+    private function at(string $time): \DateTimeImmutable
     {
         return new \DateTimeImmutable($time, new \DateTimeZone('UTC'));
     }

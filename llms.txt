@@ -47,7 +47,7 @@ $repository = new DbUtmAttributionRepository(
 
 Implements `Rasuvaeff\Yii3Utm\UtmAttributionRepository`: `append()`,
 `findByEntity()`, `findFirst()`, `findLast()`, `countByEntity()`,
-`deleteByEntity()`, `purgeOlderThan()`. Reads return
+`deleteByEntity()`, `purgeOlderThan()`, `countOlderThan()`. Reads return
 `DbUtmAttributionRecord` instances in canonical order.
 
 ### UtmAttributionTableName
@@ -93,11 +93,13 @@ every `id` then reads back as `NULL`.
 ### Console
 
 ```bash
-./yii utm:purge --older-than=365 [--dry-run]
+./yii utm:purge --older-than=P90D [--dry-run]
 ```
 
 `PurgeUtmAttributionCommand(UtmAttributionRepository $repository,
-ClockInterface $clock, int $defaultDays = 365)`. Retention only; use
+ClockInterface $clock, int $defaultDays = 365)`. `--older-than` is a positive
+ISO-8601 `DateInterval`; retention only. `--dry-run` reports the row count
+`countOlderThan()` would remove, without deleting anything. Use
 `deleteByEntity()` for a personal-data request.
 
 ### Configuration

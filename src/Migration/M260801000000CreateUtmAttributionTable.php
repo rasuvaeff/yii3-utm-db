@@ -23,12 +23,12 @@ use Yiisoft\Db\Schema\Column\ColumnBuilder;
  *
  * @api
  */
-final class M260801000000CreateUtmAttributionTable implements
+final readonly class M260801000000CreateUtmAttributionTable implements
     RevertibleMigrationInterface,
     TransactionalMigrationInterface
 {
     public function __construct(
-        private readonly UtmAttributionTableName $table = new UtmAttributionTableName(),
+        private UtmAttributionTableName $table = new UtmAttributionTableName(),
     ) {}
 
     #[\Override]

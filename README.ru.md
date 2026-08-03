@@ -88,9 +88,13 @@ $injector->make(M260801000000CreateUtmAttributionTable::class)->up($builder);
 ## Retention и стирание
 
 ```bash
-./yii utm:purge --older-than=365          # сгребание по сроку хранения
-./yii utm:purge --older-than=365 --dry-run
+./yii utm:purge --older-than=P365D          # сгребание по сроку хранения
+./yii utm:purge --older-than=P90D --dry-run
 ```
+
+`--older-than` принимает положительный ISO-8601 интервал: `P90D`, `P6M` или
+`PT12H`. Без опции используется дефолт из `retentionDays`. `--dry-run`
+показывает число строк, которые были бы удалены, ничего не удаляя.
 
 Стирание данных конкретного человека — другая операция, она на репозитории:
 `deleteByEntity($entityId)`.
@@ -103,7 +107,7 @@ $injector->make(M260801000000CreateUtmAttributionTable::class)->up($builder);
 | Идентификаторы | Имена таблицы и индексов только из валидируемого `UtmAttributionTableName` |
 | Порядок | Назначает сервер; клиент не может задним числом стать первым касанием |
 | Дубли | Unique-индекс плюс race-safe upsert, а не «проверить, потом вставить» |
-| Чужие строки | Строка, не соответствующая схеме, поднимает `MalformedRow`, а не приводится к типу  Все исключения пакета реализуют `UtmDbException`, наследник корового `UtmException`. |
+| Чужие строки | Строка, не соответствующая канонической схеме, поднимает `MalformedRow`, а не приводится к типу. Все исключения пакета реализуют `UtmDbException`, наследник корового `UtmException`. |
 
 ## Примеры
 

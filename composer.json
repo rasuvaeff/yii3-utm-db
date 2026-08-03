@@ -50,19 +50,8 @@
         "yiisoft/db-sqlite": "^2.0",
         "yiisoft/di": "^1.2.1",
         "yiisoft/injector": "^1.2",
-        "yiisoft/test-support": "^3.0"
+        "yiisoft/test-support": "^3.1"
     },
-    "repositories": [
-        {
-            "type": "path",
-            "url": "../yii3-utm",
-            "options": {
-                "symlink": true
-            }
-        }
-    ],
-    "minimum-stability": "dev",
-    "prefer-stable": true,
     "autoload": {
         "psr-4": {
             "Rasuvaeff\\Yii3UtmDb\\": "src/"

@@ -43,7 +43,7 @@ final class PurgeUtmAttributionCommand extends Command
             'older-than',
             'o',
             InputOption::VALUE_REQUIRED,
-            'Age in whole days; rows recorded before this are deleted',
+            'ISO-8601 age interval; rows recorded before this are deleted (for example P90D)',
         );
         $this->addOption('dry-run', null, InputOption::VALUE_NONE, 'Report the cut-off without deleting');
     }
@@ -51,12 +51,14 @@ final class PurgeUtmAttributionCommand extends Command
     #[\Override]
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        /** @var mixed $olderThan */
-        $olderThan = $input->getOption('older-than');
-        $before = $this->clock->now()->modify(\sprintf('-%d days', $this->days($olderThan)));
+        $before = $this->clock->now()->sub($this->interval($input->getOption('older-than')));
 
         if ($input->getOption('dry-run') === true) {
-            $output->writeln(\sprintf('Would delete rows recorded before %s', $before->format(\DateTimeInterface::ATOM)));
+            $output->writeln(\sprintf(
+                'Would delete %d row(s) recorded before %s',
+                $this->repository->countOlderThan($before),
+                $before->format(\DateTimeInterface::ATOM),
+            ));
 
             return Command::SUCCESS;
         }
@@ -71,24 +73,30 @@ final class PurgeUtmAttributionCommand extends Command
     }
 
     /**
-     * @return int<1, max>
+     * @throws \InvalidArgumentException
      */
-    private function days(mixed $option): int
+    private function interval(mixed $option): \DateInterval
     {
         if ($option === null) {
-            return $this->defaultDays > 0 ? $this->defaultDays : 1;
+            return new \DateInterval('P' . ($this->defaultDays > 0 ? $this->defaultDays : 1) . 'D');
         }
 
-        if (!\is_string($option) || \preg_match('/^\d+\z/', $option) !== 1) {
-            throw new \InvalidArgumentException('Option --older-than must be a positive whole number of days');
+        if (!\is_string($option) || $option === '') {
+            throw new \InvalidArgumentException('Option --older-than must be a positive ISO-8601 interval');
         }
 
-        $days = (int) $option;
-
-        if ($days < 1) {
-            throw new \InvalidArgumentException('Option --older-than must be a positive whole number of days');
+        try {
+            $interval = new \DateInterval($option);
+        } catch (\Exception) {
+            throw new \InvalidArgumentException('Option --older-than must be a positive ISO-8601 interval');
         }
 
-        return $days;
+        $epoch = new \DateTimeImmutable('@0');
+
+        if ($epoch->add($interval) <= $epoch) {
+            throw new \InvalidArgumentException('Option --older-than must be a positive ISO-8601 interval');
+        }
+
+        return $interval;
     }
 }

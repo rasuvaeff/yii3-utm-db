@@ -31,7 +31,7 @@ final class PurgeUtmAttributionCommandTest
     {
         $this->clock = new StaticClock(new \DateTimeImmutable('2026-08-01 12:00:00', new \DateTimeZone('UTC')));
         $this->repository = new InMemoryUtmAttributionRepository($this->clock);
-        $this->repository->append(self::attribution());
+        $this->repository->append($this->attribution());
     }
 
     public function deletesNothingWhenEverythingIsInsideTheWindow(): void
@@ -50,11 +50,11 @@ final class PurgeUtmAttributionCommandTest
         $repository = new InMemoryUtmAttributionRepository(
             new StaticClock(new \DateTimeImmutable('2020-01-01 00:00:00', new \DateTimeZone('UTC'))),
         );
-        $repository->append(self::attribution());
+        $repository->append($this->attribution());
 
         $command = new PurgeUtmAttributionCommand($repository, $this->clock);
         $output = new BufferedOutput();
-        $command->run(new ArrayInput(['--older-than' => '30']), $output);
+        $command->run(new ArrayInput(['--older-than' => 'P30D']), $output);
 
         Assert::string($output->fetch())->contains('Deleted 1 row(s)');
         Assert::same($repository->countByEntity('user-1'), 0);
@@ -62,15 +62,32 @@ final class PurgeUtmAttributionCommandTest
 
     public function dryRunTouchesNothing(): void
     {
-        $output = $this->run(['--dry-run' => true, '--older-than' => '1']);
+        $output = $this->run(['--dry-run' => true, '--older-than' => 'P1D']);
 
-        Assert::string($output)->contains('Would delete rows recorded before');
+        Assert::string($output)->contains('Would delete 0 row(s) recorded before');
         Assert::same($this->repository->countByEntity('user-1'), 1);
+    }
+
+    public function dryRunDoesNotDeleteEvenWhenTheRowIsOldEnough(): void
+    {
+        $repository = new InMemoryUtmAttributionRepository(
+            new StaticClock(new \DateTimeImmutable('2020-01-01 00:00:00', new \DateTimeZone('UTC'))),
+        );
+        $repository->append($this->attribution());
+
+        $command = new PurgeUtmAttributionCommand($repository, $this->clock);
+        $output = new BufferedOutput();
+        $command->run(new ArrayInput(['--dry-run' => true, '--older-than' => 'P30D']), $output);
+        $display = $output->fetch();
+
+        Assert::string($display)->contains('Would delete 1 row(s) recorded before');
+        Assert::false(\str_contains($display, 'Deleted'));
+        Assert::same($repository->countByEntity('user-1'), 1);
     }
 
     public function reportsTheCutOffInUtc(): void
     {
-        Assert::string($this->run(['--dry-run' => true, '--older-than' => '10']))->contains('2026-07-22T12:00:00+00:00');
+        Assert::string($this->run(['--dry-run' => true, '--older-than' => 'P10D']))->contains('2026-07-22T12:00:00+00:00');
     }
 
     public function usesTheConfiguredDefaultAge(): void
@@ -82,13 +99,22 @@ final class PurgeUtmAttributionCommandTest
         Assert::string($output->fetch())->contains('2026-07-25T12:00:00+00:00');
     }
 
+    public function aZeroConfiguredDefaultAgeFallsBackToOneDay(): void
+    {
+        $command = new PurgeUtmAttributionCommand($this->repository, $this->clock, defaultDays: 0);
+        $output = new BufferedOutput();
+        $command->run(new ArrayInput(['--dry-run' => true]), $output);
+
+        Assert::string($output->fetch())->contains('2026-07-31T12:00:00+00:00');
+    }
+
     public function rejectsANonPositiveAge(): void
     {
-        foreach (['0', '-5', 'ten', '1.5'] as $value) {
+        foreach (['', 42, '0', '-P5D', 'ten', 'P0D'] as $value) {
             try {
                 $this->run(['--older-than' => $value]);
             } catch (\InvalidArgumentException $e) {
-                Assert::string($e->getMessage())->contains('positive whole number of days');
+                Assert::string($e->getMessage())->contains('positive ISO-8601 interval');
 
                 continue;
             }
@@ -109,7 +135,7 @@ final class PurgeUtmAttributionCommandTest
         return $output->fetch();
     }
 
-    private static function attribution(): UtmAttribution
+    private function attribution(): UtmAttribution
     {
         return new UtmAttribution(
             entityId: 'user-1',

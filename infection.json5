@@ -8,7 +8,50 @@
         "summary": "build/infection-summary.log"
     },
     "testFramework": "testo",
-    "minMsi": 85,
+    // No "testFrameworkOptions": "--suite=Unit" here on purpose: Infection's
+    // initial run must include tests/Integration/SqliteIntegrationTest, the
+    // only #[Covers] source for DbUtmAttributionRepository and
+    // M260801000000CreateUtmAttributionTable (ER-003, docs/evolved-rules.md).
+    // Restricting to --suite=Unit later would silently zero out mutants for
+    // both classes again while the reported MSI goes UP, not down.
+    //
+    // 94 stays honest at 94.34% Covered Code MSI (150/159 killed, 2026-08-02
+    // after adding countOlderThan()). Nine escapes remain and are all
+    // equivalent mutants, not test gaps:
+    //   - DbUtmAttributionRepository::countByEntity (line 108) and
+    //     countOlderThan (line 139), DecrementInteger on
+    //     `max(0, (int) $count)` -> `max(-1, ...)`: $count comes from
+    //     `Query::count()`, which vendor/yiisoft/db/src/Query/Query.php
+    //     declares `@psalm-var non-negative-int|string` on the exact value
+    //     this line casts — the domain the clamp defends against never
+    //     contains a negative, so -1 and 0 clamp identically.
+    //   - DbUtmAttributionRepository::deleteByEntity/purgeOlderThan (lines 118,
+    //     128), DecrementInteger on `max(0, $affected)` -> `max(-1, ...)`:
+    //     $affected is `AbstractCommand::execute()`'s result on a DELETE,
+    //     which resolves to `PDOStatement::rowCount()` — per the PDO contract,
+    //     rowCount() after a DELETE/UPDATE/INSERT is always >= 0. Same
+    //     reasoning as above: the clamp's floor is never reached by -1 vs 0.
+    //   - DbUtmAttributionRepository::one() (line 136), IncrementInteger on
+    //     `limit(1)` -> `limit(2)`: Query::one() always resolves through
+    //     AbstractCommand::queryOne() (QUERY_MODE_ROW), which fetches exactly
+    //     one row via a single PDO fetch() regardless of the SQL LIMIT value,
+    //     as long as it is >= 1 — limit(1) and limit(2) produce an identical
+    //     result row for any dataset.
+    //   - UtmAttributionRowMapper::toRow() (lines 67, 68), NullSafePropertyCall
+    //     on `$touchpoint->referrer?->url` / `?->host` -> `->url` / `->host`:
+    //     verified empirically (PHP 8.5.6, this image) — reading a property on
+    //     null through `->` (not `?->`) raises an E_WARNING and evaluates to
+    //     `null`, the same value `?->` returns. The two forms are equivalent
+    //     in observable value; they differ only in the warning, and this
+    //     mutant survives specifically because nothing in this suite (or in
+    //     testo's default config) promotes a PHP warning to a failure. A
+    //     fail-on-warning mode, if ever added, would make this killable again.
+    //   - UtmAttributionRowMapper::time() (line 243), GreaterThan and LogicalAnd
+    //     around `getLastErrors()`: since PHP 8.2 a clean parse returns `false`,
+    //     while an invalid calendar date returns an array with warning_count > 0.
+    //     Both mutations therefore choose the same branch for every possible
+    //     result of this API.
+    "minMsi": 94,
     "mutators": {
         "@default": true
     }

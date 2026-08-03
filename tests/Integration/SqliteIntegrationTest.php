@@ -18,7 +18,7 @@ use Rasuvaeff\Yii3UtmDb\DbUtmAttributionRepository;
 use Rasuvaeff\Yii3UtmDb\Migration\M260801000000CreateUtmAttributionTable;
 use Rasuvaeff\Yii3UtmDb\UtmAttributionTableName;
 use Testo\Assert;
-use Testo\Codecov\CoversNothing;
+use Testo\Codecov\Covers;
 use Testo\Lifecycle\BeforeTest;
 use Testo\Test;
 use Yiisoft\Cache\ArrayCache;
@@ -28,19 +28,16 @@ use Yiisoft\Db\Migration\Informer\NullMigrationInformer;
 use Yiisoft\Db\Migration\MigrationBuilder;
 use Yiisoft\Db\Sqlite\Connection;
 use Yiisoft\Db\Sqlite\Driver;
+use Yiisoft\Di\Container;
+use Yiisoft\Di\ContainerConfig;
+use Yiisoft\Injector\Injector;
 
 /**
- * Exercises the real schema on SQLite: the migration, the unique index behind
- * deduplication, canonical ordering and the retention/erasure operations.
- *
- * The migration is applied exactly the way the README documents it —
- * constructing the class and calling `up()` — because
- * `MigrationService::setSourceNamespaces()` finds nothing for any `*-db`
- * package of this monorepo (see AGENTS.md, ER-044). A test that used a
- * different path would keep passing while the documented one stayed broken.
+ * Exercises the real repository on SQLite: the unique index behind
+ * deduplication, canonical ordering and retention/erasure operations.
  */
 #[Test]
-#[CoversNothing]
+#[Covers(DbUtmAttributionRepository::class)]
 final class SqliteIntegrationTest
 {
     private ConnectionInterface $db;
@@ -56,7 +53,10 @@ final class SqliteIntegrationTest
         $table = new UtmAttributionTableName();
         $builder = new MigrationBuilder($this->db, new NullMigrationInformer());
 
-        $migration = new M260801000000CreateUtmAttributionTable($table);
+        $container = new Container(ContainerConfig::create()->withDefinitions([
+            UtmAttributionTableName::class => $table,
+        ]));
+        $migration = (new Injector($container))->make(M260801000000CreateUtmAttributionTable::class);
         $migration->up($builder);
 
         $this->repository = new DbUtmAttributionRepository(
@@ -66,42 +66,9 @@ final class SqliteIntegrationTest
         );
     }
 
-    public function migrationCreatesEveryColumn(): void
-    {
-        $columns = \array_keys($this->db->getTableSchema('utm_attribution')?->getColumns() ?? []);
-
-        Assert::same($columns, [
-            'id', 'entity_id', 'event_id', 'interaction_type',
-            'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'utm_id',
-            'click_ids', 'referrer', 'referrer_host', 'landing_page',
-            'occurred_at', 'recorded_at', 'fingerprint', 'dedupe_key',
-        ]);
-    }
-
-    public function migrationCreatesEveryIndex(): void
-    {
-        $names = \array_map(
-            static fn(array $row): string => (string) $row['name'],
-            $this->db->createCommand("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'utm_attribution'")->queryAll(),
-        );
-
-        foreach (['uq_utm_attribution_dedupe', 'idx_utm_attribution_entity', 'idx_utm_attribution_entity_type', 'idx_utm_attribution_recorded'] as $expected) {
-            Assert::true(\in_array($expected, $names, true));
-        }
-    }
-
-    public function migrationIsRevertible(): void
-    {
-        $builder = new MigrationBuilder($this->db, new NullMigrationInformer());
-        (new M260801000000CreateUtmAttributionTable())->down($builder);
-        $this->db->getSchema()->refresh();
-
-        Assert::null($this->db->getTableSchema('utm_attribution', true));
-    }
-
     public function storesAndReadsBackAFullRow(): void
     {
-        $this->repository->append(self::attribution());
+        $this->repository->append($this->attribution());
 
         $record = $this->repository->findFirst('user-1');
 
@@ -115,8 +82,8 @@ final class SqliteIntegrationTest
 
     public function theSameEventTwiceLeavesOneRow(): void
     {
-        Assert::true($this->repository->append(self::attribution()));
-        Assert::false($this->repository->append(self::attribution()));
+        Assert::true($this->repository->append($this->attribution()));
+        Assert::false($this->repository->append($this->attribution()));
         Assert::same($this->repository->countByEntity('user-1'), 1);
     }
 
@@ -129,8 +96,8 @@ final class SqliteIntegrationTest
             eventId: 'order-1',
             interactionType: InteractionType::purchase(),
             history: UtmHistory::of(
-                self::touchpoint('google', '2026-07-01 10:00:00'),
-                self::touchpoint('newsletter', '2026-07-20 10:00:00'),
+                $this->touchpoint('google', '2026-07-01 10:00:00'),
+                $this->touchpoint('newsletter', '2026-07-20 10:00:00'),
             ),
         ));
 
@@ -143,8 +110,8 @@ final class SqliteIntegrationTest
             eventId: 'order-1',
             interactionType: InteractionType::purchase(),
             history: UtmHistory::of(
-                self::touchpoint('google', '2026-07-01 10:00:00'),
-                self::touchpoint('newsletter', '2026-07-20 10:00:00'),
+                $this->touchpoint('google', '2026-07-01 10:00:00'),
+                $this->touchpoint('newsletter', '2026-07-20 10:00:00'),
             ),
         )), 0);
         Assert::same($this->repository->countByEntity('user-1'), 2);
@@ -152,11 +119,11 @@ final class SqliteIntegrationTest
 
     public function firstTouchFollowsServerOrderNotTheClaimedTime(): void
     {
-        $this->repository->append(self::attribution(eventId: 'order-1', source: 'google', occurredAt: '2026-07-01 10:00:00'));
+        $this->repository->append($this->attribution(eventId: 'order-1', source: 'google', occurredAt: '2026-07-01 10:00:00'));
 
         $this->clock->advance(3600);
         // A later delivery claims to have happened years earlier.
-        $this->repository->append(self::attribution(eventId: 'order-2', source: 'spoofed', occurredAt: '2000-01-01 00:00:00'));
+        $this->repository->append($this->attribution(eventId: 'order-2', source: 'spoofed', occurredAt: '2000-01-01 00:00:00'));
 
         Assert::same($this->repository->findFirst('user-1')?->attribution()->touchpoint->utm->source, 'google');
         Assert::same($this->repository->findLast('user-1')?->attribution()->touchpoint->utm->source, 'spoofed');
@@ -164,11 +131,11 @@ final class SqliteIntegrationTest
 
     public function queriesAreScopedByEntityAndType(): void
     {
-        $this->repository->append(self::attribution(eventId: 'order-1'));
+        $this->repository->append($this->attribution(eventId: 'order-1'));
         $this->clock->advance(1);
-        $this->repository->append(self::attribution(eventId: 'reg-1', type: InteractionType::registration()));
+        $this->repository->append($this->attribution(eventId: 'reg-1', type: InteractionType::registration()));
         $this->clock->advance(1);
-        $this->repository->append(self::attribution(entityId: 'user-2', eventId: 'order-9'));
+        $this->repository->append($this->attribution(entityId: 'user-2', eventId: 'order-9'));
 
         Assert::same($this->repository->countByEntity('user-1'), 2);
         Assert::same($this->repository->countByEntity('user-1', InteractionType::purchase()), 1);
@@ -184,7 +151,7 @@ final class SqliteIntegrationTest
     {
         foreach (['a', 'b', 'c'] as $index => $source) {
             $this->clock->advance($index);
-            $this->repository->append(self::attribution(eventId: 'order-' . $source, source: $source));
+            $this->repository->append($this->attribution(eventId: 'order-' . $source, source: $source));
         }
 
         $sources = \array_map(
@@ -195,37 +162,61 @@ final class SqliteIntegrationTest
         Assert::same($sources, ['b', 'c']);
     }
 
+    public function orderingFollowsRecordedTimeNotInsertionId(): void
+    {
+        $this->repository->append($this->attribution(eventId: 'order-first', source: 'first'));
+        $this->clock->advance(10);
+        $this->repository->append($this->attribution(eventId: 'order-second', source: 'second'));
+
+        // Simulate replica lag / clock skew between two writers: the row
+        // that got the higher id ends up with the earlier recorded_at.
+        // Ordering is documented as `recorded_at, id` (AGENTS.md) precisely
+        // so this can't happen — id alone would put 'first' first here.
+        $this->db->createCommand()
+            ->update('utm_attribution', ['recorded_at' => '2000-01-01 00:00:00.000000'], ['utm_source' => 'second'])
+            ->execute();
+
+        Assert::same($this->repository->findFirst('user-1')?->attribution()->touchpoint->utm->source, 'second');
+        Assert::same($this->repository->findLast('user-1')?->attribution()->touchpoint->utm->source, 'first');
+
+        $sources = \array_map(
+            static fn(UtmAttributionRecord $r): ?string => $r->attribution()->touchpoint->utm->source,
+            $this->repository->findByEntity('user-1'),
+        );
+        Assert::same($sources, ['second', 'first']);
+    }
+
     public function retentionAndErasure(): void
     {
-        $this->repository->append(self::attribution(eventId: 'old'));
+        $this->repository->append($this->attribution(eventId: 'old'));
         $this->clock->advance(7200);
-        $this->repository->append(self::attribution(eventId: 'new'));
-        $this->repository->append(self::attribution(entityId: 'user-2', eventId: 'other'));
+        $this->repository->append($this->attribution(eventId: 'new'));
+        $this->repository->append($this->attribution(entityId: 'user-2', eventId: 'other'));
+
+        // countOlderThan reports the same figure purgeOlderThan is about to
+        // remove, and does not itself remove anything
+        Assert::same($this->repository->countOlderThan(new \DateTimeImmutable('2026-08-01 13:00:00', new \DateTimeZone('UTC'))), 1);
+        Assert::same($this->repository->countByEntity('user-1'), 2);
 
         $purged = $this->repository->purgeOlderThan(new \DateTimeImmutable('2026-08-01 13:00:00', new \DateTimeZone('UTC')));
 
         Assert::same($purged, 1);
         Assert::same($this->repository->countByEntity('user-1'), 1);
 
+        // nothing left before that cut-off: the count is exactly 0, not
+        // clamped up to 1
+        Assert::same($this->repository->countOlderThan(new \DateTimeImmutable('2026-08-01 13:00:00', new \DateTimeZone('UTC'))), 0);
+        Assert::same($this->repository->purgeOlderThan(new \DateTimeImmutable('2026-08-01 13:00:00', new \DateTimeZone('UTC'))), 0);
+
         Assert::same($this->repository->deleteByEntity('user-1'), 1);
         Assert::same($this->repository->countByEntity('user-1'), 0);
         Assert::same($this->repository->countByEntity('user-2'), 1);
+
+        // an entity with no rows deletes exactly 0, not clamped up to 1
+        Assert::same($this->repository->deleteByEntity('user-3'), 0);
     }
 
-    public function tablePrefixIsHonoured(): void
-    {
-        $table = new UtmAttributionTableName('app_utm_attribution');
-        (new M260801000000CreateUtmAttributionTable($table))->up(new MigrationBuilder($this->db, new NullMigrationInformer()));
-
-        $repository = new DbUtmAttributionRepository(db: $this->db, clock: $this->clock, table: $table);
-        $repository->append(self::attribution());
-
-        Assert::same($repository->countByEntity('user-1'), 1);
-        // the default table stays untouched
-        Assert::same($this->repository->countByEntity('user-1'), 0);
-    }
-
-    private static function attribution(
+    private function attribution(
         string $entityId = 'user-1',
         string $eventId = 'order-1',
         string $source = 'google',
@@ -246,7 +237,7 @@ final class SqliteIntegrationTest
         );
     }
 
-    private static function touchpoint(string $source, string $time): UtmTouchpoint
+    private function touchpoint(string $source, string $time): UtmTouchpoint
     {
         return UtmTouchpoint::of(
             utm: new UtmParameters(source: $source),

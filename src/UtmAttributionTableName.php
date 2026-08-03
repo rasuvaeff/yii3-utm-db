@@ -18,7 +18,7 @@ namespace Rasuvaeff\Yii3UtmDb;
  *
  * @api
  */
-final readonly class UtmAttributionTableName
+final readonly class UtmAttributionTableName implements \Stringable
 {
     public const string DEFAULT = 'utm_attribution';
 
@@ -32,6 +32,7 @@ final readonly class UtmAttributionTableName
         }
     }
 
+    #[\Override]
     public function __toString(): string
     {
         return $this->value;

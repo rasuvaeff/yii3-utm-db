@@ -88,9 +88,13 @@ column: first touch is whatever the server recorded first.
 ## Retention and erasure
 
 ```bash
-./yii utm:purge --older-than=365          # retention sweep
-./yii utm:purge --older-than=365 --dry-run
+./yii utm:purge --older-than=P365D          # retention sweep
+./yii utm:purge --older-than=P90D --dry-run
 ```
+
+`--older-than` accepts a positive ISO-8601 interval such as `P90D`, `P6M` or
+`PT12H`. Without the option, `retentionDays` supplies the default. `--dry-run`
+reports the number of rows that would be deleted, without deleting them.
 
 Deleting one person's data is a different operation and lives on the
 repository: `deleteByEntity($entityId)`.
@@ -103,7 +107,7 @@ repository: `deleteByEntity($entityId)`.
 | Identifiers | Table and index names come only from the validated `UtmAttributionTableName` |
 | Ordering | Server-assigned; a client cannot backdate itself into first touch |
 | Duplicates | Prevented by the unique index plus a race-safe upsert, not by check-then-insert |
-| Foreign rows | A row that does not match the schema raises `MalformedRow` instead of being coerced  Every exception of this package implements `UtmDbException`, which extends the core `UtmException`. |
+| Foreign rows | A row that does not match the canonical schema raises `MalformedRow` instead of being coerced. Every exception of this package implements `UtmDbException`, which extends the core `UtmException`. |
 
 ## Examples
 

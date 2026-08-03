@@ -20,6 +20,9 @@ use Yiisoft\Db\Migration\Informer\NullMigrationInformer;
 use Yiisoft\Db\Migration\MigrationBuilder;
 use Yiisoft\Db\Sqlite\Connection;
 use Yiisoft\Db\Sqlite\Driver;
+use Yiisoft\Di\Container;
+use Yiisoft\Di\ContainerConfig;
+use Yiisoft\Injector\Injector;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
@@ -47,9 +50,14 @@ $clock = new class ($utc) implements ClockInterface {
 $db = new Connection(new Driver('sqlite::memory:'), new SchemaCache(new ArrayCache()));
 $table = new UtmAttributionTableName();
 
-// The documented migration path: construct and call up(). Namespace discovery
-// does not work for *-db packages of this monorepo.
-(new M260801000000CreateUtmAttributionTable($table))->up(new MigrationBuilder($db, new NullMigrationInformer()));
+// The documented migration path: Injector resolves the configured table-name
+// value object. Namespace discovery does not work for *-db packages here.
+$container = new Container(ContainerConfig::create()->withDefinitions([
+    UtmAttributionTableName::class => $table,
+]));
+(new Injector($container))
+    ->make(M260801000000CreateUtmAttributionTable::class)
+    ->up(new MigrationBuilder($db, new NullMigrationInformer()));
 
 $repository = new DbUtmAttributionRepository(db: $db, clock: $clock, table: $table);
 $service = new UtmAttributionService($repository);

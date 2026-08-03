@@ -90,9 +90,15 @@ final readonly class UtmAttributionRowMapper
             touchpoint: $this->touchpoint($row),
         );
 
-        $storedDedupeKey = $this->optionalString($row, 'dedupe_key');
+        $storedFingerprint = $this->requireString($row, 'fingerprint');
 
-        if ($storedDedupeKey !== null && $storedDedupeKey !== $attribution->dedupeKey) {
+        if ($storedFingerprint !== $attribution->fingerprint) {
+            throw MalformedRow::column('fingerprint', 'does not match the stored touchpoint');
+        }
+
+        $storedDedupeKey = $this->requireString($row, 'dedupe_key');
+
+        if ($storedDedupeKey !== $attribution->dedupeKey) {
             throw MalformedRow::column('dedupe_key', 'does not match the stored touchpoint');
         }
 
@@ -113,22 +119,43 @@ final readonly class UtmAttributionRowMapper
      */
     private function touchpoint(array $row): UtmTouchpoint
     {
-        $referrer = $this->optionalString($row, 'referrer');
+        $landingPage = $this->optionalString($row, 'landing_page');
 
-        return UtmTouchpoint::of(
-            utm: new UtmParameters(
-                source: $this->optionalString($row, 'utm_source'),
-                medium: $this->optionalString($row, 'utm_medium'),
-                campaign: $this->optionalString($row, 'utm_campaign'),
-                term: $this->optionalString($row, 'utm_term'),
-                content: $this->optionalString($row, 'utm_content'),
-                id: $this->optionalString($row, 'utm_id'),
-            ),
+        $touchpoint = UtmTouchpoint::of(
+            utm: $this->utm($row),
             occurredAt: $this->time($row, 'occurred_at'),
             clickIds: $this->clickIds($row),
-            referrer: $referrer === null ? null : Referrer::of($referrer),
-            landingPage: $this->optionalString($row, 'landing_page'),
+            referrer: $this->referrer($row),
+            landingPage: $landingPage,
         );
+
+        if ($touchpoint->landingPage !== $landingPage) {
+            throw MalformedRow::column('landing_page', 'is not canonical');
+        }
+
+        return $touchpoint;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function utm(array $row): UtmParameters
+    {
+        $values = [
+            'utm_source' => $this->optionalString($row, 'utm_source'),
+            'utm_medium' => $this->optionalString($row, 'utm_medium'),
+            'utm_campaign' => $this->optionalString($row, 'utm_campaign'),
+            'utm_term' => $this->optionalString($row, 'utm_term'),
+            'utm_content' => $this->optionalString($row, 'utm_content'),
+            'utm_id' => $this->optionalString($row, 'utm_id'),
+        ];
+        $utm = UtmParameters::fromArray($values);
+
+        if ($utm->toArray() !== $values) {
+            throw MalformedRow::column('utm_*', 'contains a non-canonical value');
+        }
+
+        return $utm;
     }
 
     /**
@@ -136,11 +163,7 @@ final readonly class UtmAttributionRowMapper
      */
     private function clickIds(array $row): ClickIds
     {
-        $raw = $this->optionalString($row, 'click_ids');
-
-        if ($raw === null || $raw === '' || $raw === '{}') {
-            return ClickIds::empty();
-        }
+        $raw = $this->requireString($row, 'click_ids');
 
         try {
             /** @var mixed $decoded */
@@ -149,11 +172,47 @@ final readonly class UtmAttributionRowMapper
             throw MalformedRow::column('click_ids', 'is not valid JSON');
         }
 
-        if (!\is_array($decoded)) {
+        if (!\is_array($decoded) || ($decoded !== [] && \array_is_list($decoded))) {
             throw MalformedRow::column('click_ids', 'is not a JSON object');
         }
 
-        return ClickIds::fromArray($decoded);
+        /** @var array<array-key, mixed> $decoded */
+        $clickIds = ClickIds::fromArray($decoded);
+
+        if ($clickIds->toJson() !== $raw) {
+            throw MalformedRow::column('click_ids', 'is not canonical');
+        }
+
+        return $clickIds;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function referrer(array $row): ?Referrer
+    {
+        $url = $this->optionalString($row, 'referrer');
+        $storedHost = $this->optionalString($row, 'referrer_host');
+
+        if ($url === null) {
+            if ($storedHost !== null) {
+                throw MalformedRow::column('referrer_host', 'exists without a referrer');
+            }
+
+            return null;
+        }
+
+        $referrer = Referrer::of($url);
+
+        if (!$referrer instanceof Referrer) {
+            throw MalformedRow::column('referrer', 'is not a canonical absolute URL');
+        }
+
+        if ($storedHost !== $referrer->host) {
+            throw MalformedRow::column('referrer_host', 'does not match the referrer URL');
+        }
+
+        return $referrer;
     }
 
     /**
@@ -174,11 +233,19 @@ final readonly class UtmAttributionRowMapper
     private function time(array $row, string $column): \DateTimeImmutable
     {
         $value = $this->requireString($row, $column);
-        $parsed = \DateTimeImmutable::createFromFormat(self::TIME_FORMAT, $value, new \DateTimeZone('UTC'))
-            ?: \DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $value, new \DateTimeZone('UTC'));
+        $parsed = \DateTimeImmutable::createFromFormat(self::TIME_FORMAT, $value, new \DateTimeZone('UTC'));
+        $errors = \DateTimeImmutable::getLastErrors();
 
         if ($parsed === false) {
-            throw MalformedRow::column($column, 'is not a UTC timestamp');
+            throw MalformedRow::column($column, 'cannot be parsed as a UTC timestamp');
+        }
+
+        if ($errors !== false && $errors['warning_count'] > 0) {
+            throw MalformedRow::column($column, 'contains an invalid calendar date');
+        }
+
+        if ($parsed->format(self::TIME_FORMAT) !== $value) {
+            throw MalformedRow::column($column, 'is not a canonical UTC timestamp');
         }
 
         return $parsed;
@@ -191,7 +258,6 @@ final readonly class UtmAttributionRowMapper
      */
     private function requireScalar(array $row, string $column): string
     {
-        /** @var mixed $value */
         $value = $row[$column] ?? null;
 
         if (!\is_string($value) && !\is_int($value)) {
@@ -228,8 +294,11 @@ final readonly class UtmAttributionRowMapper
      */
     private function optionalString(array $row, string $column): ?string
     {
-        /** @var mixed $value */
-        $value = $row[$column] ?? null;
+        if (!\array_key_exists($column, $row)) {
+            throw MalformedRow::column($column, 'is missing');
+        }
+
+        $value = $row[$column];
 
         if ($value === null) {
             return null;
