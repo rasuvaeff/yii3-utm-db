@@ -6,6 +6,7 @@ namespace Rasuvaeff\Yii3UtmDb\Tests;
 
 use Psr\Clock\ClockInterface;
 use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Rasuvaeff\Yii3Utm\UtmAttributionRepository;
 use Rasuvaeff\Yii3UtmDb\Command\PurgeUtmAttributionCommand;
 use Rasuvaeff\Yii3UtmDb\DbUtmAttributionRepository;
@@ -84,19 +85,40 @@ final class ConfigWiringTest
      */
     public function resolvesTheRepositoryWithAndWithoutALoggerBinding(): void
     {
-        Assert::instanceOf(
-            $this->container()->get(UtmAttributionRepository::class),
-            DbUtmAttributionRepository::class,
-        );
+        $without = $this->container()->get(UtmAttributionRepository::class);
+
+        Assert::instanceOf($without, DbUtmAttributionRepository::class);
+        Assert::instanceOf($this->repositoryProperty($without, 'logger'), NullLogger::class);
 
         $withLogger = $this->container(extra: [
             LoggerInterface::class => static fn(): LoggerInterface => new SimpleLogger(),
         ]);
 
-        Assert::instanceOf(
-            $withLogger->get(UtmAttributionRepository::class),
-            DbUtmAttributionRepository::class,
-        );
+        $with = $withLogger->get(UtmAttributionRepository::class);
+
+        Assert::instanceOf($with, DbUtmAttributionRepository::class);
+        Assert::instanceOf($this->repositoryProperty($with, 'logger'), SimpleLogger::class);
+    }
+
+    /**
+     * The parameter is validated and injected like `table_prefix` above: the
+     * configured value reaches the constructor, not just the container.
+     */
+    public function passesTheConfiguredPurgeBatchSizeThrough(): void
+    {
+        $params = $this->params();
+        $params['rasuvaeff/yii3-utm-db']['purgeBatchSize'] = 42;
+
+        $repository = $this->container($params)->get(UtmAttributionRepository::class);
+
+        Assert::same($this->repositoryProperty($repository, 'purgeBatchSize'), 42);
+    }
+
+    private function repositoryProperty(object $repository, string $name): mixed
+    {
+        $property = new \ReflectionProperty(DbUtmAttributionRepository::class, $name);
+
+        return $property->getValue($repository);
     }
 
     public function registersTheConsoleCommand(): void
@@ -163,7 +185,10 @@ final class ConfigWiringTest
      */
     private function container(?array $params = null, array $extra = []): Container
     {
-        $definitions = $this->definitions($params) + $extra;
+        // array_replace, not `+`: $extra is an override list, and the union
+        // operator keeps the left operand on collision, so a key already
+        // defined by config/di.php would silently ignore it.
+        $definitions = \array_replace($this->definitions($params), $extra);
         $definitions[ClockInterface::class] = static fn(): ClockInterface
             => new StaticClock(new \DateTimeImmutable('2026-08-01 12:00:00', new \DateTimeZone('UTC')));
         $definitions[ConnectionInterface::class] = static fn(): ConnectionInterface

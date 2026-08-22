@@ -35,13 +35,17 @@ composer require rasuvaeff/yii3-utm-db
    the readable rows — a page can be shorter than `$limit`, and `$offset`
    counts rows, not records; `findFirst()`/`findLast()` step over a malformed
    edge row, bounded by `UtmAttributionRepository::MAX_LIMIT`; the counts count
-   rows. Every skipped row goes to the PSR-3 `logger` constructor argument at
-   `error` level (default `NullLogger` — bind the application logger).
+   rows. Each call reports its skips to the PSR-3 `logger` constructor
+   argument at `error` level: the first skip with row id, reason and exception,
+   further skips of the same call as one summary line (default `NullLogger` —
+   bind the application logger).
 7. **The canonical form is a data contract.** `ClickIds::KNOWN_KEYS` is
    append-only with a frozen order, `ClickIds`/`UtmParameters` value
    normalisation is frozen, and `UtmAttributionRowMapper::TIME_FORMAT` is
    frozen. Changing any of them turns stored rows into `MalformedRow`s and
-   needs a migration rewriting `fingerprint`, `dedupe_key` and `click_ids`.
+   needs a migration — a `TIME_FORMAT` change rewrites `occurred_at` and
+   `recorded_at`, a `ClickIds` change rewrites `click_ids`, and any change to
+   the normalised values recomputes `fingerprint` and `dedupe_key`.
 
 ## API reference
 
@@ -55,7 +59,7 @@ $repository = new DbUtmAttributionRepository(
     clock: $clock,                                // Psr\Clock\ClockInterface
     table: new UtmAttributionTableName(),         // defaults to utm_attribution
     mapper: new UtmAttributionRowMapper(),
-    purgeBatchSize: 1000,                         // rows per DELETE in purgeOlderThan()
+    purgeBatchSize: 1000,                         // positive-int; rows per DELETE in purgeOlderThan()
     logger: $logger,                              // Psr\Log\LoggerInterface; reports skipped rows
 );
 ```
@@ -120,6 +124,6 @@ ISO-8601 `DateInterval`; retention only. `--dry-run` reports the row count
 ### Configuration
 
 `config/params.php` → `rasuvaeff/yii3-utm-db`: `table`, `table_prefix`,
-`retentionDays`; plus `yiisoft/yii-console.commands['utm:purge']`.
+`retentionDays`, `purgeBatchSize`; plus `yiisoft/yii-console.commands['utm:purge']`.
 `config/di.php` binds `UtmAttributionTableName`,
 `DbUtmAttributionRepository`, `UtmAttributionRepository` and the command.

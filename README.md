@@ -82,8 +82,12 @@ column: first touch is whatever the server recorded first.
     'table' => 'utm_attribution',
     'table_prefix' => '',
     'retentionDays' => 365,
+    'purgeBatchSize' => 1000,
 ],
 ```
+
+`purgeBatchSize` is the number of rows `purgeOlderThan()` deletes per
+statement; values below one are rejected in the constructor.
 
 ## Retention and erasure
 
@@ -98,11 +102,11 @@ reports the number of rows that would be deleted, without deleting them.
 
 `purgeOlderThan()` deletes in batches by primary key —
 `DbUtmAttributionRepository::DEFAULT_PURGE_BATCH_SIZE` (1000) rows per
-statement, configurable through the `purgeBatchSize` constructor argument. The
-first sweep of a table nothing else trims removes months of rows, and one
-unbounded `DELETE` would mean one long transaction: undo/WAL growth,
-replication lag, and on MySQL next-key locks across the whole `recorded_at`
-range.
+statement, configurable through the `purgeBatchSize` constructor argument or
+the package parameter of the same name. An initial sweep over a table without
+another trimming process can remove months of rows, and one unbounded `DELETE`
+would mean one long transaction: undo/WAL growth, replication lag, and on
+MySQL next-key locks across the whole `recorded_at` range.
 
 Deleting one person's data is a different operation and lives on the
 repository: `deleteByEntity($entityId)`.
@@ -112,7 +116,7 @@ repository: `deleteByEntity($entityId)`.
 The mapper does not trust the table: it recomputes the fingerprint and the
 dedupe key from the row and rejects a mismatch, and it requires `click_ids`,
 `landing_page`, the `utm_*` values and both timestamps to be in their canonical
-form. That is what keeps a foreign write out of an attribution report — and it
+form. That is what keeps an untrusted row out of an attribution report — and it
 also means the canonical form is **data**, not an implementation detail.
 
 Frozen for the lifetime of this schema:
@@ -125,8 +129,10 @@ Frozen for the lifetime of this schema:
 | `UtmAttributionRowMapper::TIME_FORMAT` | Ordering is lexicographic on the stored string |
 
 Changing any of them turns already-stored rows into `MalformedRow`s and
-requires a migration that rewrites `fingerprint`, `dedupe_key` and `click_ids`
-— not a minor release.
+requires a migration — a `TIME_FORMAT` change rewrites `occurred_at` and
+`recorded_at`, a `ClickIds` change rewrites `click_ids`, and any change to the
+normalised values recomputes `fingerprint` and `dedupe_key`. It is never a
+minor release.
 
 ### A row that fails the contract
 
@@ -141,7 +147,9 @@ So:
 | `findFirst()` / `findLast()` | Step over a malformed edge row and return the first readable one in that direction, scanning at most `UtmAttributionRepository::MAX_LIMIT` rows |
 | `countByEntity()` / `countOlderThan()` | Count **rows** — unreadable ones included; the gap against a shorter page is the signal |
 
-Each skipped row is reported to the PSR-3 logger at `error` level with its id:
+Each call that skips rows reports them to the PSR-3 logger at `error` level —
+the first skip with its id, reason and exception, every further skip of the
+same call counted into one summary line:
 
 ```php
 $repository = new DbUtmAttributionRepository(

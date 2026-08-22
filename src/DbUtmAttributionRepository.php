@@ -35,9 +35,12 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
     private string $table;
 
     /**
-     * @param int<1, max> $purgeBatchSize rows deleted per statement by {@see self::purgeOlderThan()}
-     * @param LoggerInterface $logger receives one `error` per row skipped as malformed;
-     *        the default silences the report, so bind the application logger
+     * @param int $purgeBatchSize rows deleted per statement by {@see self::purgeOlderThan()};
+     *        a value below one would silently turn the retention sweep into a
+     *        no-op and is rejected here
+     * @param LoggerInterface $logger receives one detailed `error` per call plus one
+     *        summary for any further rows skipped as malformed; the default
+     *        silences the report, so bind the application logger
      */
     public function __construct(
         private ConnectionInterface $db,
@@ -47,6 +50,10 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
         private int $purgeBatchSize = self::DEFAULT_PURGE_BATCH_SIZE,
         private LoggerInterface $logger = new NullLogger(),
     ) {
+        if ($purgeBatchSize < 1) {
+            throw new \InvalidArgumentException(\sprintf('Invalid purge batch size "%d"', $purgeBatchSize));
+        }
+
         $this->table = $table->value;
     }
 
@@ -80,7 +87,8 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
      * foreign row hides every valid record of the entity, and the reader has no
      * way to see even the rows that are fine. The page therefore comes back
      * **shorter than `$limit`** when a row is skipped, and `$offset` counts
-     * rows, not records; the skipped row is reported to the logger with its id.
+     * rows, not records; the skipped rows are reported to the logger with the
+     * id of the first one.
      */
     #[\Override]
     public function findByEntity(
@@ -96,6 +104,7 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
             ->all();
 
         $records = [];
+        $skipped = [];
 
         /** @var mixed $row */
         foreach ($rows as $row) {
@@ -104,12 +113,16 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
             }
 
             /** @var array<string, mixed> $row */
-            $record = $this->map($row);
+            $outcome = $this->map($row);
 
-            if ($record instanceof UtmAttributionRecord) {
-                $records[] = $record;
+            if ($outcome instanceof UtmAttributionRecord) {
+                $records[] = $outcome;
+            } else {
+                $skipped[] = $outcome;
             }
         }
+
+        $this->reportSkipped($skipped);
 
         return $records;
     }
@@ -229,14 +242,15 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
         }
 
         /** @var array<string, mixed> $row */
-        $record = $this->map($row);
+        $outcome = $this->map($row);
 
-        if ($record instanceof UtmAttributionRecord) {
-            return $record;
+        if ($outcome instanceof UtmAttributionRecord) {
+            return $outcome;
         }
 
-        // Offset 1: the row just rejected is already reported, and reporting it
-        // twice for one call would double every malformed-row alert.
+        // Offset 1: the row just rejected is already collected, and reporting
+        // it twice for one call would double every malformed-row alert.
+        $skipped = [$outcome];
         $rows = $query->limit(self::MAX_LIMIT)->offset(1)->all();
 
         /** @var mixed $next */
@@ -246,12 +260,18 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
             }
 
             /** @var array<string, mixed> $next */
-            $record = $this->map($next);
+            $outcome = $this->map($next);
 
-            if ($record instanceof UtmAttributionRecord) {
-                return $record;
+            if ($outcome instanceof UtmAttributionRecord) {
+                $this->reportSkipped($skipped);
+
+                return $outcome;
             }
+
+            $skipped[] = $outcome;
         }
+
+        $this->reportSkipped($skipped);
 
         return null;
     }
@@ -259,22 +279,51 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
     /**
      * @param array<string, mixed> $row
      */
-    private function map(array $row): ?UtmAttributionRecord
+    private function map(array $row): UtmAttributionRecord|MalformedRow
     {
         try {
             return $this->mapper->toRecord($row);
         } catch (MalformedRow $e) {
-            $this->logger->error(
-                'Skipped a malformed UTM attribution row: {reason}',
-                [
-                    'reason' => $e->getMessage(),
-                    'table' => $this->table,
-                    'rowId' => $e->rowId,
-                    'exception' => $e,
-                ],
-            );
+            return $e;
+        }
+    }
 
-            return null;
+    /**
+     * One detailed report per call, one summary for the rest.
+     *
+     * Logging every skip of every read would let a single bulk import of
+     * foreign rows fill the error channel with duplicates of one underlying
+     * cause. The first skipped row keeps its full context — reason, table,
+     * row id, exception; every further row of the same call is counted into a
+     * single summary line.
+     *
+     * @param list<MalformedRow> $skipped
+     */
+    private function reportSkipped(array $skipped): void
+    {
+        if ($skipped === []) {
+            return;
+        }
+
+        $first = $skipped[0];
+
+        $this->logger->error(
+            'Skipped a malformed UTM attribution row: {reason}',
+            [
+                'reason' => $first->getMessage(),
+                'table' => $this->table,
+                'rowId' => $first->rowId,
+                'exception' => $first,
+            ],
+        );
+
+        $rest = \count($skipped) - 1;
+
+        if ($rest > 0) {
+            $this->logger->error(
+                'Skipped {count} more malformed UTM attribution rows in this call',
+                ['count' => $rest, 'table' => $this->table],
+            );
         }
     }
 

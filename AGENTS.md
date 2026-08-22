@@ -28,21 +28,22 @@ Design decisions and their reasons live in
 
 ## Commands
 
-No PHP/Composer on the host — run in Docker via the `composer:2` image. The
-package depends on the unpublished core through a path repository, so mount the
-**monorepo root**, not the package directory:
+No PHP/Composer on the host — run in Docker via the `composer:2` image, from
+the package directory. The core is resolved from Packagist
+(`rasuvaeff/yii3-utm: ^1.0`) — a test here can only assert core behaviour that
+is already **released**; a fix that spans both packages needs its cross-package
+assertion in the core's own suite.
 
 ```bash
-docker run --rm -v "/home/rasuvaeff/projects/rasuvaeff":/repo -w /repo/yii3-utm-db \
-  composer:2 sh -c 'git config --global --add safe.directory "*"; composer build'
-docker run --rm -v "/home/rasuvaeff/projects/rasuvaeff":/repo -w /repo/yii3-utm-db \
-  composer:2 vendor/bin/testo --suite=Integration
+docker run --rm -v "$PWD":/app -w /app composer:2 composer build
+docker run --rm -v "$PWD":/app -w /app composer:2 vendor/bin/testo --suite=Integration
 ```
 
-The core is resolved from Packagist (`rasuvaeff/yii3-utm: ^1.0`), not from a
-path repository — so a test here can only assert core behaviour that is
-already **released**. A fix that spans both packages needs its cross-package
-assertion in the core's own suite.
+Or with Make (build only — the Integration suite has no make target):
+
+```bash
+make build
+```
 
 ## Invariants & gotchas
 
@@ -65,15 +66,20 @@ assertion in the core's own suite.
   the order is part of the canonical JSON), `ClickIds::MAX_VALUE_LENGTH` and
   its value pattern, `UtmParameters::normalize()` and its
   `MAX_VALUE_LENGTH`, and `TIME_FORMAT`. Changing any of them turns
-  already-stored rows into `MalformedRow`s and needs a migration rewriting
-  `fingerprint`, `dedupe_key` and `click_ids` — never a minor release.
+  already-stored rows into `MalformedRow`s and needs a migration — a
+  `TIME_FORMAT` change rewrites `occurred_at` and `recorded_at`, a `ClickIds`
+  change rewrites `click_ids`, and any change to the normalised values
+  recomputes `fingerprint` and `dedupe_key`. It is never a minor release.
 - **A malformed row is skipped on read and must name itself.** Strictness in
   the mapper is right; strictness *fatal on read* is not — one foreign row
   would hide the entire history of an entity, including from the operator who
-  has to delete it. `map()` catches `MalformedRow`, reports it to the PSR-3
-  logger with the row id and returns null; `findFirst()`/`findLast()` widen
-  from `limit(1)` to a scan bounded by `MAX_LIMIT` only after the row they
-  fetched turns out to be broken. Consequences that belong in every doc
+  has to delete it. `map()` catches `MalformedRow` and returns it to the
+  caller; each call reports its skips through `reportSkipped()` — the first
+  skip with row id, reason and exception, every further skip of the same call
+  counted into one summary line (a bulk import of foreign rows must not fill
+  the error channel with duplicates of one cause). `findFirst()`/`findLast()`
+  widen from `limit(1)` to a scan bounded by `MAX_LIMIT` only after the row
+  they fetched turns out to be broken. Consequences that belong in every doc
   touching reads: a page can be **shorter than `$limit`**, `$offset` counts
   rows and the counts count rows. `toRecord()` reads the id first and re-throws
   every later `MalformedRow` through `forRow()`; a message naming only the
@@ -83,7 +89,9 @@ assertion in the core's own suite.
   `forRow()` carries all three over.
 - **`purgeOlderThan()` deletes in batches by primary key.** `DELETE ... LIMIT`
   is not portable across the drivers `yiisoft/db` supports, so the loop selects
-  a bounded set of ids and deletes those. Batching is invisible in the end
+  a bounded set of ids and deletes those; a non-positive `purgeBatchSize` is
+  rejected in the constructor (`LIMIT 0` selects nothing and would silently
+  turn the sweep into a no-op). Batching is invisible in the end
   state — the rows are gone either way — so the integration test counts the
   statements through a `ProfilerInterface`; asserting only on the row count
   would pass against an unbounded delete. The loop also stops when a batch

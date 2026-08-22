@@ -21,6 +21,7 @@ use Rasuvaeff\Yii3UtmDb\Migration\M260801000000CreateUtmAttributionTable;
 use Rasuvaeff\Yii3UtmDb\UtmAttributionTableName;
 use Testo\Assert;
 use Testo\Codecov\Covers;
+use Testo\Data\DataProvider;
 use Testo\Lifecycle\BeforeTest;
 use Testo\Test;
 use Yiisoft\Cache\ArrayCache;
@@ -377,8 +378,8 @@ final class SqliteIntegrationTest
 
     /**
      * When nothing in the table is readable, the answer is "nothing", not an
-     * exception — and every skipped row is reported, so the silence is loud in
-     * the log.
+     * exception — and the skips are reported, so the silence is loud in the
+     * log without one line per row.
      */
     public function anEntityOfNothingButMalformedRowsReadsAsEmpty(): void
     {
@@ -393,9 +394,64 @@ final class SqliteIntegrationTest
         Assert::null($repository->findFirst('user-1'));
         Assert::null($repository->findLast('user-1'));
 
-        // 2 from findByEntity, then 2 per single-row read: the row it fetched
-        // plus the one row the widened scan reaches.
-        Assert::same(\count($logger->getMessages()), 6);
+        // 2 from findByEntity (the detailed first report plus one summary),
+        // then 2 per single-row read: the row it fetched plus the one row the
+        // widened scan reaches, reported the same way.
+        $messages = $logger->getMessages();
+
+        Assert::same(\count($messages), 6);
+
+        // The first skip of a call carries its row id; every further skip of
+        // the same call is counted into a single summary line.
+        Assert::same($messages[0]['context']['table'], 'utm_attribution');
+        Assert::string($messages[0]['context']['rowId']);
+        Assert::instanceOf($messages[0]['context']['exception'], MalformedRow::class);
+        Assert::string((string) $messages[1]['message'])->contains('more malformed UTM attribution rows');
+        Assert::same($messages[1]['context']['count'], 1);
+        Assert::same($messages[1]['context']['table'], 'utm_attribution');
+    }
+
+    /**
+     * A non-positive batch size would silently turn the retention sweep into
+     * a no-op — every `LIMIT 0` selects nothing and the loop exits at once.
+     */
+    #[DataProvider('invalidPurgeBatchSizesProvider')]
+    public function aPurgeBatchSizeBelowOneIsRejected(int $batchSize): void
+    {
+        try {
+            new DbUtmAttributionRepository(
+                db: $this->db,
+                clock: $this->clock,
+                purgeBatchSize: $batchSize,
+            );
+        } catch (\InvalidArgumentException $e) {
+            Assert::string($e->getMessage())->contains('Invalid purge batch size');
+
+            return;
+        }
+
+        Assert::true(actual: false);
+    }
+
+    public static function invalidPurgeBatchSizesProvider(): iterable
+    {
+        yield 'zero' => [0];
+
+        yield 'negative' => [-5];
+    }
+
+    /**
+     * The boundary itself stays valid: a batch of one is slow but correct.
+     */
+    public function aPurgeBatchSizeOfOneIsStillAccepted(): void
+    {
+        $repository = new DbUtmAttributionRepository(
+            db: $this->db,
+            clock: $this->clock,
+            purgeBatchSize: 1,
+        );
+
+        Assert::same($repository->countByEntity('user-1'), 0);
     }
 
     private function repositoryWith(SimpleLogger $logger): DbUtmAttributionRepository

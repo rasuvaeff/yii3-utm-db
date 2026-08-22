@@ -31,6 +31,11 @@ $table = (is_string($prefix) ? $prefix : '') . $table;
 $retentionDays = $config['retentionDays'] ?? 365;
 $retentionDays = is_int($retentionDays) && $retentionDays > 0 ? $retentionDays : 365;
 
+$purgeBatchSize = $config['purgeBatchSize'] ?? DbUtmAttributionRepository::DEFAULT_PURGE_BATCH_SIZE;
+$purgeBatchSize = is_int($purgeBatchSize) && $purgeBatchSize >= 1
+    ? $purgeBatchSize
+    : DbUtmAttributionRepository::DEFAULT_PURGE_BATCH_SIZE;
+
 return [
     // the migration resolves this by type through Injector::make(), so the
     // repository and the migration can never disagree about the table
@@ -50,6 +55,7 @@ return [
         db: $db,
         clock: $clock,
         table: $tableName,
+        purgeBatchSize: $purgeBatchSize,
         logger: $logger ?? new NullLogger(),
     ),
 

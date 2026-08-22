@@ -15,20 +15,21 @@
     // Restricting to --suite=Unit later would silently zero out mutants for
     // both classes again while the reported MSI goes UP, not down.
     //
-    // 94 stays honest at 95% Covered Code MSI (174 killed + 4 timed out of 186,
-    // 2026-08-22 after batching the purge and skipping malformed rows on read).
+    // 94 stays honest at 96% Covered Code MSI (192 killed + 4 timed out of 204,
+    // 2026-08-22 after exposing purgeBatchSize and bounding the malformed-row
+    // report per call).
     // The four timeouts are the purge loop's two exit conditions: remove either
     // and the loop re-selects the same ids forever, which is exactly what the
     // veto-trigger test in SqliteIntegrationTest provokes. Eight escapes remain
     // and are all equivalent mutants, not test gaps:
-    //   - DbUtmAttributionRepository::countByEntity (line 134) and
-    //     countOlderThan (line 205), DecrementInteger on
+    //   - DbUtmAttributionRepository::countByEntity (line 147) and
+    //     countOlderThan (line 218), DecrementInteger on
     //     `max(0, (int) $count)` -> `max(-1, ...)`: $count comes from
     //     `Query::count()`, which vendor/yiisoft/db/src/Query/Query.php
     //     declares `@psalm-var non-negative-int|string` on the exact value
     //     this line casts — the domain the clamp defends against never
     //     contains a negative, so -1 and 0 clamp identically.
-    //   - DbUtmAttributionRepository::deleteByEntity (line 144),
+    //   - DbUtmAttributionRepository::deleteByEntity (line 157),
     //     DecrementInteger on `max(0, $affected)` -> `max(-1, ...)`:
     //     $affected is `AbstractCommand::execute()`'s result on a DELETE,
     //     which resolves to `PDOStatement::rowCount()` — per the PDO contract,
@@ -36,7 +37,7 @@
     //     reasoning as above: the clamp's floor is never reached by -1 vs 0.
     //     purgeOlderThan() no longer clamps at all: its accumulator only ever
     //     adds a value the loop already proved positive.
-    //   - DbUtmAttributionRepository::one() (line 225), IncrementInteger on
+    //   - DbUtmAttributionRepository::one() (line 238), IncrementInteger on
     //     `limit(1)` -> `limit(2)`: Query::one() always resolves through
     //     AbstractCommand::queryOne() (QUERY_MODE_ROW), which fetches exactly
     //     one row via a single PDO fetch() regardless of the SQL LIMIT value,
