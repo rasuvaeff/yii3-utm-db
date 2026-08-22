@@ -125,7 +125,7 @@ final class UtmAttributionRowMapperTest
             return;
         }
 
-        Assert::true(false);
+        Assert::true(actual: false);
     }
 
     public static function malformedRowsProvider(): iterable
@@ -174,13 +174,52 @@ final class UtmAttributionRowMapperTest
         } catch (MalformedRow $e) {
             Assert::same(
                 $e->getMessage(),
-                'Malformed attribution row: column "referrer" is not a canonical absolute URL',
+                'Malformed attribution row: column "referrer" is not a canonical absolute URL (row id 1)',
             );
 
             return;
         }
 
-        Assert::true(false);
+        Assert::true(actual: false);
+    }
+
+    /**
+     * `findByEntity()` maps rows in a loop, so one broken row aborts the whole
+     * query. A message naming only the column leaves nothing to look the row
+     * up by, which is why every failure below the id carries it.
+     */
+    public function everyRejectionNamesTheRow(): void
+    {
+        $row = [...$this->validRow(), 'id' => '4711', 'click_ids' => 'not json'];
+
+        try {
+            $this->mapper->toRecord($row);
+        } catch (MalformedRow $e) {
+            Assert::same($e->rowId, '4711');
+            Assert::string($e->getMessage())->contains('click_ids');
+            Assert::string($e->getMessage())->contains('(row id 4711)');
+
+            return;
+        }
+
+        Assert::true(actual: false);
+    }
+
+    /**
+     * The id itself can be the broken column, and then there is no id to name.
+     */
+    public function aRejectedIdCarriesNoRowId(): void
+    {
+        try {
+            $this->mapper->toRecord([...$this->validRow(), 'id' => null]);
+        } catch (MalformedRow $e) {
+            Assert::null($e->rowId);
+            Assert::false(\str_contains($e->getMessage(), 'row id'));
+
+            return;
+        }
+
+        Assert::true(actual: false);
     }
 
     /**
@@ -200,7 +239,7 @@ final class UtmAttributionRowMapperTest
             return;
         }
 
-        Assert::true(false);
+        Assert::true(actual: false);
     }
 
     public function rejectsAStoredFingerprintThatDoesNotMatch(): void
@@ -215,7 +254,7 @@ final class UtmAttributionRowMapperTest
             return;
         }
 
-        Assert::true(false);
+        Assert::true(actual: false);
     }
 
     public function formatsTimeInUtc(): void

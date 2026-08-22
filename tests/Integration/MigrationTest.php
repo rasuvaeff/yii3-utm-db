@@ -59,7 +59,7 @@ final class MigrationTest
         );
 
         foreach (['uq_utm_attribution_dedupe', 'idx_utm_attribution_entity', 'idx_utm_attribution_entity_type', 'idx_utm_attribution_recorded'] as $expected) {
-            Assert::true(\in_array($expected, $names, true));
+            Assert::true(\in_array($expected, $names, strict: true));
         }
     }
 

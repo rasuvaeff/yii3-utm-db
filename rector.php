@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Rasuvaeff\RectorNamedLiterals\AddNameToLiteralArgumentRector;
 use Rector\Config\RectorConfig;
 
 return RectorConfig::configure()
@@ -10,4 +11,5 @@ return RectorConfig::configure()
         __DIR__ . '/tests',
     ])
     ->withPhpSets(php83: true)
-    ->withPreparedSets(deadCode: true, codeQuality: true);
+    ->withPreparedSets(deadCode: true, codeQuality: true)
+    ->withRules([AddNameToLiteralArgumentRector::class]);

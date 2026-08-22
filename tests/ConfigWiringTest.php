@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Rasuvaeff\Yii3UtmDb\Tests;
 
 use Psr\Clock\ClockInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Rasuvaeff\Yii3Utm\UtmAttributionRepository;
 use Rasuvaeff\Yii3UtmDb\Command\PurgeUtmAttributionCommand;
 use Rasuvaeff\Yii3UtmDb\DbUtmAttributionRepository;
@@ -20,6 +22,7 @@ use Yiisoft\Db\Sqlite\Driver;
 use Yiisoft\Di\Container;
 use Yiisoft\Di\ContainerConfig;
 use Yiisoft\Test\Support\Clock\StaticClock;
+use Yiisoft\Test\Support\Log\SimpleLogger;
 
 /**
  * `config/di.php` and `config/params.php` are outside `src`, so neither cs,
@@ -52,8 +55,8 @@ final class ConfigWiringTest
         $backend = \array_keys($this->definitions());
 
         Assert::same(\array_values(\array_intersect($core, $backend)), []);
-        Assert::true(\in_array(UtmAttributionRepository::class, $backend, true));
-        Assert::false(\in_array(UtmAttributionRepository::class, $core, true));
+        Assert::true(\in_array(UtmAttributionRepository::class, $backend, strict: true));
+        Assert::false(\in_array(UtmAttributionRepository::class, $core, strict: true));
     }
 
     public function shareNoParamKeysWithTheCore(): void
@@ -72,6 +75,50 @@ final class ConfigWiringTest
         $container = $this->container($params);
 
         Assert::same($container->get(UtmAttributionTableName::class)->value, 'app_utm_attribution');
+    }
+
+    /**
+     * The container below binds no PSR-3 logger on purpose. The repository only
+     * *reports* a malformed row, so an application without a logger must still
+     * receive a working repository instead of a container error — and one with
+     * a logger must not need any extra configuration to get the reports.
+     */
+    public function resolvesTheRepositoryWithAndWithoutALoggerBinding(): void
+    {
+        $without = $this->container()->get(UtmAttributionRepository::class);
+
+        Assert::instanceOf($without, DbUtmAttributionRepository::class);
+        Assert::instanceOf($this->repositoryProperty($without, 'logger'), NullLogger::class);
+
+        $withLogger = $this->container(extra: [
+            LoggerInterface::class => static fn(): LoggerInterface => new SimpleLogger(),
+        ]);
+
+        $with = $withLogger->get(UtmAttributionRepository::class);
+
+        Assert::instanceOf($with, DbUtmAttributionRepository::class);
+        Assert::instanceOf($this->repositoryProperty($with, 'logger'), SimpleLogger::class);
+    }
+
+    /**
+     * The parameter is validated and injected like `table_prefix` above: the
+     * configured value reaches the constructor, not just the container.
+     */
+    public function passesTheConfiguredPurgeBatchSizeThrough(): void
+    {
+        $params = $this->params();
+        $params['rasuvaeff/yii3-utm-db']['purgeBatchSize'] = 42;
+
+        $repository = $this->container($params)->get(UtmAttributionRepository::class);
+
+        Assert::same($this->repositoryProperty($repository, 'purgeBatchSize'), 42);
+    }
+
+    private function repositoryProperty(object $repository, string $name): mixed
+    {
+        $property = new \ReflectionProperty(DbUtmAttributionRepository::class, $name);
+
+        return $property->getValue($repository);
     }
 
     public function registersTheConsoleCommand(): void
@@ -134,10 +181,14 @@ final class ConfigWiringTest
 
     /**
      * @param array<string, mixed>|null $params
+     * @param array<string, mixed> $extra
      */
-    private function container(?array $params = null): Container
+    private function container(?array $params = null, array $extra = []): Container
     {
-        $definitions = $this->definitions($params);
+        // array_replace, not `+`: $extra is an override list, and the union
+        // operator keeps the left operand on collision, so a key already
+        // defined by config/di.php would silently ignore it.
+        $definitions = \array_replace($this->definitions($params), $extra);
         $definitions[ClockInterface::class] = static fn(): ClockInterface
             => new StaticClock(new \DateTimeImmutable('2026-08-01 12:00:00', new \DateTimeZone('UTC')));
         $definitions[ConnectionInterface::class] = static fn(): ConnectionInterface

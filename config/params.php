@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Rasuvaeff\Yii3UtmDb\Command\PurgeUtmAttributionCommand;
+use Rasuvaeff\Yii3UtmDb\DbUtmAttributionRepository;
 use Rasuvaeff\Yii3UtmDb\UtmAttributionTableName;
 
 return [
@@ -19,5 +20,7 @@ return [
         // of the way of your application's own
         'table_prefix' => '',
         'retentionDays' => 365,
+        // rows per DELETE statement in purgeOlderThan()
+        'purgeBatchSize' => DbUtmAttributionRepository::DEFAULT_PURGE_BATCH_SIZE,
     ],
 ];
