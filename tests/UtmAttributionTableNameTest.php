@@ -48,7 +48,7 @@ final class UtmAttributionTableNameTest
             return;
         }
 
-        Assert::true(false);
+        Assert::true(actual: false);
     }
 
     public static function rejectedNamesProvider(): iterable

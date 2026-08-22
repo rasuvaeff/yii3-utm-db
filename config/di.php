@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use Psr\Clock\ClockInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Rasuvaeff\Yii3Utm\UtmAttributionRepository;
 use Rasuvaeff\Yii3UtmDb\Command\PurgeUtmAttributionCommand;
 use Rasuvaeff\Yii3UtmDb\DbUtmAttributionRepository;
@@ -35,14 +37,20 @@ return [
     UtmAttributionTableName::class => static fn (): UtmAttributionTableName
         => new UtmAttributionTableName($table),
 
+    // The logger is optional on purpose: a malformed row is reported, never
+    // thrown, so an application with a PSR-3 binding sees the skipped rows —
+    // and one without a binding still resolves the repository instead of
+    // failing at container build time.
     DbUtmAttributionRepository::class => static fn (
         ConnectionInterface $db,
         ClockInterface $clock,
         UtmAttributionTableName $tableName,
+        ?LoggerInterface $logger = null,
     ): DbUtmAttributionRepository => new DbUtmAttributionRepository(
         db: $db,
         clock: $clock,
         table: $tableName,
+        logger: $logger ?? new NullLogger(),
     ),
 
     UtmAttributionRepository::class => DbUtmAttributionRepository::class,

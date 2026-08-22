@@ -119,7 +119,7 @@ final class PurgeUtmAttributionCommandTest
                 continue;
             }
 
-            Assert::true(false);
+            Assert::true(actual: false);
         }
     }
 

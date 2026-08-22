@@ -28,7 +28,20 @@ composer require rasuvaeff/yii3-utm-db
    missing column, unparsable timestamp, a `dedupe_key` that disagrees with the
    stored touchpoint — raises `Exception\MalformedRow`, which implements
    `Exception\UtmDbException` (itself a `Rasuvaeff\Yii3Utm\Exception\UtmException`),
-   so a consumer can catch every failure of the UTM stack in one place.
+   so a consumer can catch every failure of the UTM stack in one place. The
+   exception names the row: `MalformedRow::$rowId` and a `(row id N)` suffix on
+   the message.
+6. **A malformed row is skipped on read, not fatal.** `findByEntity()` returns
+   the readable rows — a page can be shorter than `$limit`, and `$offset`
+   counts rows, not records; `findFirst()`/`findLast()` step over a malformed
+   edge row, bounded by `UtmAttributionRepository::MAX_LIMIT`; the counts count
+   rows. Every skipped row goes to the PSR-3 `logger` constructor argument at
+   `error` level (default `NullLogger` — bind the application logger).
+7. **The canonical form is a data contract.** `ClickIds::KNOWN_KEYS` is
+   append-only with a frozen order, `ClickIds`/`UtmParameters` value
+   normalisation is frozen, and `UtmAttributionRowMapper::TIME_FORMAT` is
+   frozen. Changing any of them turns stored rows into `MalformedRow`s and
+   needs a migration rewriting `fingerprint`, `dedupe_key` and `click_ids`.
 
 ## API reference
 
@@ -42,6 +55,8 @@ $repository = new DbUtmAttributionRepository(
     clock: $clock,                                // Psr\Clock\ClockInterface
     table: new UtmAttributionTableName(),         // defaults to utm_attribution
     mapper: new UtmAttributionRowMapper(),
+    purgeBatchSize: 1000,                         // rows per DELETE in purgeOlderThan()
+    logger: $logger,                              // Psr\Log\LoggerInterface; reports skipped rows
 );
 ```
 

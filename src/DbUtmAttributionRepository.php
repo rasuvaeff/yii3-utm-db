@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace Rasuvaeff\Yii3UtmDb;
 
 use Psr\Clock\ClockInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Rasuvaeff\Yii3Utm\InteractionType;
 use Rasuvaeff\Yii3Utm\UtmAttribution;
 use Rasuvaeff\Yii3Utm\UtmAttributionRecord;
 use Rasuvaeff\Yii3Utm\UtmAttributionRepository;
+use Rasuvaeff\Yii3UtmDb\Exception\MalformedRow;
 use Yiisoft\Db\Connection\ConnectionInterface;
 use Yiisoft\Db\Exception\IntegrityException;
 use Yiisoft\Db\Query\Query;
@@ -27,13 +30,22 @@ use Yiisoft\Db\Query\Query;
  */
 final readonly class DbUtmAttributionRepository implements UtmAttributionRepository
 {
+    public const int DEFAULT_PURGE_BATCH_SIZE = 1000;
+
     private string $table;
 
+    /**
+     * @param int<1, max> $purgeBatchSize rows deleted per statement by {@see self::purgeOlderThan()}
+     * @param LoggerInterface $logger receives one `error` per row skipped as malformed;
+     *        the default silences the report, so bind the application logger
+     */
     public function __construct(
         private ConnectionInterface $db,
         private ClockInterface $clock,
         UtmAttributionTableName $table = new UtmAttributionTableName(),
         private UtmAttributionRowMapper $mapper = new UtmAttributionRowMapper(),
+        private int $purgeBatchSize = self::DEFAULT_PURGE_BATCH_SIZE,
+        private LoggerInterface $logger = new NullLogger(),
     ) {
         $this->table = $table->value;
     }
@@ -60,6 +72,16 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
         return $affected > 0;
     }
 
+    /**
+     * A row the mapper rejects is skipped, not fatal.
+     *
+     * The mapper is strict on purpose — a row it does not recognise was written
+     * by something else — but making that strictness fatal here means a single
+     * foreign row hides every valid record of the entity, and the reader has no
+     * way to see even the rows that are fine. The page therefore comes back
+     * **shorter than `$limit`** when a row is skipped, and `$offset` counts
+     * rows, not records; the skipped row is reported to the logger with its id.
+     */
     #[\Override]
     public function findByEntity(
         string $entityId,
@@ -82,7 +104,11 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
             }
 
             /** @var array<string, mixed> $row */
-            $records[] = $this->mapper->toRecord($row);
+            $record = $this->map($row);
+
+            if ($record instanceof UtmAttributionRecord) {
+                $records[] = $record;
+            }
         }
 
         return $records;
@@ -118,14 +144,54 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
         return \max(0, $affected);
     }
 
+    /**
+     * Deletes in batches of {@see $purgeBatchSize}, by primary key.
+     *
+     * `utm:purge` is the retention job for a table nothing else trims, so its
+     * first production run removes months of rows. One unbounded `DELETE`
+     * means one long transaction: undo/WAL growth, replication lag, and on
+     * MySQL next-key locks across the whole `recorded_at` range. Selecting a
+     * bounded set of ids and deleting those keeps each statement small, and it
+     * is portable — `DELETE ... LIMIT` is not.
+     */
     #[\Override]
     public function purgeOlderThan(\DateTimeImmutable $before): int
     {
-        $affected = $this->db->createCommand()
-            ->delete($this->table, ['<', 'recorded_at', UtmAttributionRowMapper::formatTime($before)])
-            ->execute();
+        $cutoff = UtmAttributionRowMapper::formatTime($before);
+        $deleted = 0;
 
-        return \max(0, $affected);
+        while (true) {
+            /** @var list<mixed> $ids */
+            $ids = (new Query($this->db))
+                ->select('id')
+                ->from($this->table)
+                ->where(['<', 'recorded_at', $cutoff])
+                ->limit($this->purgeBatchSize)
+                ->column();
+
+            // The loop ends on an empty selection rather than on a partial
+            // batch: one extra bounded SELECT costs nothing next to a second
+            // exit condition, and `['id' => []]` is an empty `IN`, which is a
+            // trap worth not going anywhere near.
+            if ($ids === []) {
+                break;
+            }
+
+            $affected = $this->db->createCommand()->delete($this->table, ['id' => $ids])->execute();
+
+            // Rows selected but none deleted: a concurrent purge got there
+            // first, or the driver refuses to delete them (a BEFORE DELETE
+            // trigger, a rule). The next pass would select the very same ids
+            // and do nothing again — an unbounded loop holding a connection.
+            // Retention is a repeating job; stopping loses nothing.
+            if ($affected <= 0) {
+                break;
+            }
+
+            $deleted += $affected;
+        }
+
+        return $deleted;
     }
 
     #[\Override]
@@ -139,20 +205,77 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
         return \max(0, (int) $count);
     }
 
+    /**
+     * The first *readable* row in the requested direction.
+     *
+     * One row is fetched on the hot path. Only when that row turns out to be
+     * malformed does the query widen: without it, a single foreign row at the
+     * edge of an entity would make `findFirst()`/`findLast()` fail for that
+     * entity forever, which is exactly the row an operator cannot delete
+     * without first being able to read the rest. The widened scan is bounded by
+     * {@see UtmAttributionRepository::MAX_LIMIT} — beyond that the table is not
+     * "a foreign row", it is a foreign table, and null is the honest answer.
+     */
     private function one(string $entityId, ?InteractionType $interactionType, int $direction): ?UtmAttributionRecord
     {
+        $query = $this->baseQuery($entityId, $interactionType)
+            ->orderBy(['recorded_at' => $direction, 'id' => $direction]);
+
         /** @var mixed $row */
-        $row = $this->baseQuery($entityId, $interactionType)
-            ->orderBy(['recorded_at' => $direction, 'id' => $direction])
-            ->limit(1)
-            ->one();
+        $row = $query->limit(1)->one();
 
         if (!\is_array($row)) {
             return null;
         }
 
         /** @var array<string, mixed> $row */
-        return $this->mapper->toRecord($row);
+        $record = $this->map($row);
+
+        if ($record instanceof UtmAttributionRecord) {
+            return $record;
+        }
+
+        // Offset 1: the row just rejected is already reported, and reporting it
+        // twice for one call would double every malformed-row alert.
+        $rows = $query->limit(self::MAX_LIMIT)->offset(1)->all();
+
+        /** @var mixed $next */
+        foreach ($rows as $next) {
+            if (!\is_array($next)) {
+                continue;
+            }
+
+            /** @var array<string, mixed> $next */
+            $record = $this->map($next);
+
+            if ($record instanceof UtmAttributionRecord) {
+                return $record;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function map(array $row): ?UtmAttributionRecord
+    {
+        try {
+            return $this->mapper->toRecord($row);
+        } catch (MalformedRow $e) {
+            $this->logger->error(
+                'Skipped a malformed UTM attribution row: {reason}',
+                [
+                    'reason' => $e->getMessage(),
+                    'table' => $this->table,
+                    'rowId' => $e->rowId,
+                    'exception' => $e,
+                ],
+            );
+
+            return null;
+        }
     }
 
     private function baseQuery(string $entityId, ?InteractionType $interactionType): Query

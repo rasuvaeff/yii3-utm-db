@@ -75,11 +75,34 @@ final readonly class UtmAttributionRowMapper
     }
 
     /**
+     * The id is read first and every later failure is re-thrown carrying it:
+     * a single broken row aborts a whole `findByEntity()` batch, and a message
+     * naming only the column leaves nothing to look the row up by.
+     *
      * @param array<string, mixed> $row
      */
     public function toRecord(array $row): DbUtmAttributionRecord
     {
         $id = $this->requireScalar($row, 'id');
+
+        try {
+            return $this->record($row, $id);
+        } catch (MalformedRow $e) {
+            throw $e->forRow($id);
+        }
+    }
+
+    public static function formatTime(\DateTimeImmutable $time): string
+    {
+        return $time->setTimezone(new \DateTimeZone('UTC'))->format(self::TIME_FORMAT);
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @param non-empty-string $id
+     */
+    private function record(array $row, string $id): DbUtmAttributionRecord
+    {
         $entityId = $this->requireString($row, 'entity_id');
         $eventId = $this->requireString($row, 'event_id');
 
@@ -107,11 +130,6 @@ final readonly class UtmAttributionRowMapper
             attribution: $attribution,
             recordedAt: $this->time($row, 'recorded_at'),
         );
-    }
-
-    public static function formatTime(\DateTimeImmutable $time): string
-    {
-        return $time->setTimezone(new \DateTimeZone('UTC'))->format(self::TIME_FORMAT);
     }
 
     /**
