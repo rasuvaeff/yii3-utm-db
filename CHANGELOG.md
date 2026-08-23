@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- `DbUtmAttributionRepository::append()` no longer swallows every `IntegrityException` as "already recorded". Previously any integrity error — today only a unique-`dedupe_key` conflict, but a foreign key, CHECK or NOT NULL constraint added to the table later — silently read as a duplicate and the delivery was counted as handled. A recognised duplicate-key signature (MySQL 1062, PostgreSQL 23505, SQLite/MSSQL/Oracle messages) is still swallowed; any other recognisable integrity violation is re-thrown. Errors from drivers with unknown signatures keep the legacy tolerant path.
+
 ## 1.1.0 — 2026-08-22
 
 ### Fixed

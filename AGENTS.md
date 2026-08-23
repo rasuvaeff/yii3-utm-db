@@ -56,6 +56,10 @@ make build
   the client claimed and must never appear in an `ORDER BY`.
 - **`append()` must stay race-safe**: a no-op upsert plus `IntegrityException`
   handling. "Check, then insert" leaves a window where two requests both write.
+  Only a duplicate-key conflict may be swallowed as "already recorded" — the
+  classification lives in `IntegrityError`; a recognised foreign-key / CHECK /
+  NOT NULL violation must surface, and unrecognised drivers keep the legacy
+  tolerant path.
 - **Timestamps are fixed-width UTC strings** (`Y-m-d H:i:s.u`, column width 30)
   because the canonical order is lexicographic on every driver.
 - **The canonical form is a data contract, frozen for the lifetime of this

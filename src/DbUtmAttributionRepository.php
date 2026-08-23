@@ -62,6 +62,11 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
      * duplicate-key error handled for drivers that raise instead. A separate
      * "check, then insert" would leave a window in which two requests both see
      * nothing and both write.
+     *
+     * Only a duplicate-key conflict is swallowed as "already recorded"; any
+     * other integrity failure — a foreign key, a CHECK or NOT NULL constraint
+     * added to the table later — is re-thrown rather than silently counted
+     * as a handled delivery.
      */
     #[\Override]
     public function append(UtmAttribution $attribution): bool
@@ -72,7 +77,11 @@ final readonly class DbUtmAttributionRepository implements UtmAttributionReposit
             $affected = $this->db->createCommand()
                 ->upsert($this->table, $row, false)
                 ->execute();
-        } catch (IntegrityException) {
+        } catch (IntegrityException $e) {
+            if (!IntegrityError::isDuplicateKey($e)) {
+                throw $e;
+            }
+
             return false;
         }
 

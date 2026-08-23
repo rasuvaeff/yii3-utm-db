@@ -175,7 +175,7 @@ if you call the mapper directly.
 | SQL | Every value is a bound parameter |
 | Identifiers | Table and index names come only from the validated `UtmAttributionTableName` |
 | Ordering | Server-assigned; a client cannot backdate itself into first touch |
-| Duplicates | Prevented by the unique index plus a race-safe upsert, not by check-then-insert |
+| Duplicates | Prevented by the unique index plus a race-safe upsert, not by check-then-insert; only a duplicate-key conflict is swallowed as "already recorded" — a foreign-key, CHECK or NOT NULL violation of the same table surfaces as an exception instead of counting as a handled delivery |
 | Foreign rows | A row that does not match the canonical schema is never coerced into a record: the mapper raises `MalformedRow` naming the offending row id, and the repository skips the row and reports it instead of returning it. Every exception of this package implements `UtmDbException`, which extends the core `UtmException`. |
 
 ## Examples

@@ -23,7 +23,9 @@ composer require rasuvaeff/yii3-utm-db
    `occurred_at` is what the client claimed; it never orders anything and there
    is no `is_first_interaction` column.
 4. **`append()` is race-safe**: a no-op upsert with duplicate-key handling. Do
-   not replace it with `exists()` + `insert()`.
+   not replace it with `exists()` + `insert()`. Only a duplicate-key conflict
+   is swallowed as "already recorded"; a foreign-key / CHECK / NOT NULL
+   violation is re-thrown, not counted as a handled delivery.
 5. **Rows are validated, not coerced.** A row that does not match the schema —
    missing column, unparsable timestamp, a `dedupe_key` that disagrees with the
    stored touchpoint — raises `Exception\MalformedRow`, which implements
