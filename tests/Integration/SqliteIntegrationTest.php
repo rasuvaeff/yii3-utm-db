@@ -27,6 +27,7 @@ use Testo\Test;
 use Yiisoft\Cache\ArrayCache;
 use Yiisoft\Db\Cache\SchemaCache;
 use Yiisoft\Db\Connection\ConnectionInterface;
+use Yiisoft\Db\Exception\IntegrityException;
 use Yiisoft\Db\Migration\Informer\NullMigrationInformer;
 use Yiisoft\Db\Migration\MigrationBuilder;
 use Yiisoft\Db\Sqlite\Connection;
@@ -319,6 +320,40 @@ final class SqliteIntegrationTest
 
         Assert::same($repository->purgeOlderThan($cutoff), 0);
         Assert::same($repository->countOlderThan($cutoff), 3);
+    }
+
+    public function appendReportsADriverDuplicateKeyErrorAsNotCreated(): void
+    {
+        $this->abortEveryInsertWith('UNIQUE constraint failed: forced');
+
+        Assert::false($this->repository->append($this->attribution()));
+    }
+
+    public function appendRethrowsAnIntegrityErrorThatIsNotADuplicateKey(): void
+    {
+        $this->abortEveryInsertWith('CHECK constraint failed: forced');
+
+        try {
+            $this->repository->append($this->attribution());
+        } catch (IntegrityException $e) {
+            Assert::string($e->getMessage())->contains('CHECK constraint failed: forced');
+
+            return;
+        }
+
+        Assert::true(actual: false, message: 'Expected the integrity error to be rethrown');
+    }
+
+    private function abortEveryInsertWith(string $message): void
+    {
+        $pdo = $this->db->getPdo();
+
+        Assert::instanceOf($pdo, \PDO::class);
+
+        $pdo?->exec(
+            'CREATE TRIGGER abort_insert BEFORE INSERT ON ' . (new UtmAttributionTableName())->value
+            . " BEGIN SELECT RAISE(ABORT, '" . $message . "'); END",
+        );
     }
 
     /**

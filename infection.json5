@@ -15,7 +15,9 @@
     // Restricting to --suite=Unit later would silently zero out mutants for
     // both classes again while the reported MSI goes UP, not down.
     //
-    // 94 stays honest at 96% Covered Code MSI (192 killed + 4 timed out of 204,
+    // Measured 2026-11-01 with --with-uncovered (counts code the tests execute but
+    // do not name in #[Covers]): 247 mutants, overall MSI 95%, 96% Covered Code MSI.
+    // Earlier note: 94 stays honest at 96% Covered Code MSI (192 killed + 4 timed out of 204,
     // 2026-08-22 after exposing purgeBatchSize and bounding the malformed-row
     // report per call).
     // The four timeouts are the purge loop's two exit conditions: remove either
@@ -52,6 +54,14 @@
     //     mutant survives specifically because nothing in this suite (or in
     //     testo's default config) promotes a PHP warning to a failure. A
     //     fail-on-warning mode, if ever added, would make this killable again.
+    //   - DbUtmAttributionRepository::append() (line 85), ReturnRemoval on the
+    //     duplicate-key `return false`: without it control falls through to
+    //     `$affected > 0` with `$affected` undefined (null > 0 is false), the same
+    //     value; it differs only in a warning.
+    //   - DbUtmAttributionRepository::findByEntity() (line 121) and the widened-scan
+    //     loop (line 268), Continue_ on `!is_array($row)`: Query::all() returns arrays
+    //     of rows only, so the guard never fires (Not Covered, unreachable with a real
+    //     connection).
     //   - UtmAttributionRowMapper::time() (line 261), GreaterThan and LogicalAnd
     //     around `getLastErrors()`: since PHP 8.2 a clean parse returns `false`,
     //     while an invalid calendar date returns an array with warning_count > 0.
@@ -59,6 +69,24 @@
     //     result of this API.
     "minMsi": 94,
     "mutators": {
-        "@default": true
+        "@default": true,
+        // Constructor/method parameter declarations with a default value
+        // (`private int $x = 100,`, `bool $strict = false,`): the mutant sits on a
+        // signature line with no executable opcode under pcov, so it is reported Not
+        // Covered whatever the tests do. Only a type-prefixed `$name = default,` line
+        // matches; a body line cannot (no type before the variable). Do NOT add ^ or $:
+        // Infection wraps the pattern as ^-\s*REGEX$ over the removed diff line.
+        // Verified 2026-11-01 by diffing the survivor lists with and without it:
+        // bulkhead 6, circuit-breaker 13, json-ld 19 mutants removed, all of them
+        // such signature lines; Escaped and Timed Out unchanged.
+        "global-ignoreSourceCodeByRegex": [
+            "(?:(?:private|protected|public|readonly)\\s+)*\\??[A-Za-z_\\\\][\\w\\\\|]*\\s+\\$\\w+\\s*=\\s*[^,;]+,"
+        ],
+        // Off: with --with-uncovered a PublicVisibility mutant sits on a parameterless
+        // method's signature line, which has no executable opcode under pcov/xdebug,
+        // so it is reported Not Covered and can never be killed, whatever #[Covers]
+        // says. Measured on pinned-http-client 2026-11-01: 4 of 4 such mutants were
+        // Not Covered, none killed.
+        "PublicVisibility": false
     }
 }
