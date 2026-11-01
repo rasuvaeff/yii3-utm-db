@@ -57,6 +57,10 @@ final class IntegrityErrorTest
             ),
         )];
 
+        yield 'upper-case duplicate message without a driver code' => [new IntegrityException(
+            'ERROR: DUPLICATE KEY VALUE VIOLATES UNIQUE CONSTRAINT "UQ_UTM_TOUCH_DEDUPE"',
+        )];
+
         yield 'unknown driver message stays on the legacy path' => [new IntegrityException(
             'exotic driver exploded while checking the key',
         )];

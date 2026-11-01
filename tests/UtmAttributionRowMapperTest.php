@@ -134,6 +134,10 @@ final class UtmAttributionRowMapperTest
 
         yield 'non-scalar id' => [['id' => ['x']], 'id'];
 
+        yield 'empty id' => [['id' => ''], 'is empty'];
+
+        yield 'non-canonical landing page' => [['landing_page' => ' https://shop.example.com/summer '], 'landing_page'];
+
         yield 'missing entity' => [['entity_id' => null], 'entity_id'];
 
         yield 'empty entity' => [['entity_id' => ''], 'entity_id'];

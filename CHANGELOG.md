@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Mutation testing now counts uncovered code (`--with-uncovered`, template mutator settings): overall MSI 95% against `minMsi` 94. Added tests for `append()` handling of driver duplicate-key and other integrity errors (via an abort trigger), upper-case duplicate-key messages in `IntegrityError`, and empty-id / non-canonical landing-page rows in `UtmAttributionRowMapper`. No src changes.
+
 ## 1.2.0 — 2026-08-23
 
 ### Fixed
